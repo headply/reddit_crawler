@@ -6,6 +6,9 @@ on:
     - cron: '0 6 * * *'
   workflow_dispatch:  # Allow manual triggering
 
+permissions:
+  contents: read
+
 jobs:
   scrape-and-enrich:
     runs-on: ubuntu-latest
