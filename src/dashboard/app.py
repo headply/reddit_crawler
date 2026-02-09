@@ -145,7 +145,7 @@ def load_data() -> tuple[pd.DataFrame, pd.DataFrame]:
     init_db()
     try:
         conn = get_connection()
-    except (ConnectionError, Exception) as exc:
+    except (ConnectionError, ImportError, OSError) as exc:
         raise ConnectionError(
             "**Could not connect to the database.**\n\n"
             "If you are deploying on Streamlit Cloud with Supabase PostgreSQL, "

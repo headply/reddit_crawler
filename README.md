@@ -176,7 +176,7 @@ Add these in **Settings > Secrets and variables > Actions**:
 
 1. **Create a Supabase project** at [supabase.com](https://supabase.com/) (free tier works)
 2. **Run the schema** – Open the **SQL Editor** in the Supabase dashboard and paste the contents of [`data/schema_postgres.sql`](data/schema_postgres.sql), then click **Run**
-3. **Copy the connection string** – Go to **Project Settings → Database → Connection string → URI** and copy the `postgresql://` URI (use the **Transaction pooler** string on port `6543` for Streamlit Cloud)
+3. **Copy the connection string** – Go to **Project Settings → Database → Connection string → URI** and copy the `postgresql://` URI (use the **Transaction pooler** string on port `6543` for Streamlit Cloud, as it handles short-lived connections more reliably)
 4. Replace the `[YOUR-PASSWORD]` placeholder in the URI with your database password
 
 ### Dashboard (Streamlit Community Cloud)
