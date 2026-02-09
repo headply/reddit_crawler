@@ -77,12 +77,17 @@ def get_existing_post_ids(subreddit: str) -> set[str]:
     Returns:
         Set of post_id strings already in the database.
     """
+    from src.db import _placeholder
+
     conn = get_connection()
     try:
-        rows = conn.execute(
-            "SELECT post_id FROM posts WHERE subreddit = ?", (subreddit,)
-        ).fetchall()
-        return {row["post_id"] for row in rows}
+        cursor = conn.cursor()
+        ph = _placeholder()
+        cursor.execute(
+            f"SELECT post_id FROM posts WHERE subreddit = {ph}", (subreddit,)
+        )
+        rows = cursor.fetchall()
+        return {row[0] for row in rows}
     finally:
         conn.close()
 
