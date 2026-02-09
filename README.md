@@ -172,15 +172,27 @@ Add these in **Settings > Secrets and variables > Actions**:
 
 ## Deployment
 
+### Database – Supabase (PostgreSQL)
+
+1. **Create a Supabase project** at [supabase.com](https://supabase.com/) (free tier works)
+2. **Run the schema** – Open the **SQL Editor** in the Supabase dashboard and paste the contents of [`data/schema_postgres.sql`](data/schema_postgres.sql), then click **Run**
+3. **Copy the connection string** – Go to **Project Settings → Database → Connection string → URI** and copy the `postgresql://` URI (use the **Transaction pooler** string on port `6543` for Streamlit Cloud)
+4. Replace the `[YOUR-PASSWORD]` placeholder in the URI with your database password
+
 ### Dashboard (Streamlit Community Cloud)
+
 1. Push the repo to GitHub
 2. Go to [share.streamlit.io](https://share.streamlit.io)
 3. Connect your repo, set main file path to `src/dashboard/app.py`
-4. Add secrets in the Streamlit dashboard settings
+4. In the app's **Settings → Secrets**, add:
+   ```toml
+   DATABASE_URL = "postgresql://postgres.<ref>:<password>@aws-0-<region>.pooler.supabase.com:6543/postgres"
+   ```
+5. Reboot the app — the dashboard will connect to your Supabase database
 
-### Database
-- **Local**: SQLite file at `data/reddit_jobs.db` (auto-created)
-- **Production**: Set `DATABASE_URL` to a PostgreSQL connection string (Render / Railway / Supabase free tier)
+### Database Summary
+- **Local development**: SQLite file at `data/reddit_jobs.db` (auto-created)
+- **Production**: Set `DATABASE_URL` to the Supabase (or any PostgreSQL) connection string
 
 ## Ethical Note on Reddit Data Usage
 
