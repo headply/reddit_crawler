@@ -2,9 +2,8 @@ name: Daily Reddit Job Scrape
 
 on:
   schedule:
-    # Run once per day at 06:00 UTC
     - cron: '0 6 * * *'
-  workflow_dispatch:  # Allow manual triggering
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -26,25 +25,10 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      - name: Download existing database
-        uses: actions/download-artifact@v4
-        with:
-          name: reddit-jobs-db
-          path: data/
-        continue-on-error: true  # First run won't have an artifact
-
       - name: Run pipeline
         env:
           REDDIT_CLIENT_ID: ${{ secrets.REDDIT_CLIENT_ID }}
           REDDIT_CLIENT_SECRET: ${{ secrets.REDDIT_CLIENT_SECRET }}
           REDDIT_USER_AGENT: ${{ secrets.REDDIT_USER_AGENT }}
-          DATABASE_URL: sqlite:///data/reddit_jobs.db
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
         run: python -m src.pipeline.run
-
-      - name: Upload updated database
-        uses: actions/upload-artifact@v4
-        with:
-          name: reddit-jobs-db
-          path: data/reddit_jobs.db
-          retention-days: 90
-          overwrite: true
