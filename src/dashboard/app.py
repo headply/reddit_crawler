@@ -1,7 +1,7 @@
 """Streamlit dashboard for the Reddit Job Intelligence Platform.
 
 Interactive dashboard with filters, charts, and a hot jobs section.
-Uses Material Design icons instead of emojis for a professional look.
+Uses inline SVG icons for a professional look without external dependencies.
 """
 
 import os
@@ -19,11 +19,45 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 from src.db import get_connection, init_db
 
 # ---------------------------------------------------------------------------
+# Inline SVG icons (no external font dependency)
+# ---------------------------------------------------------------------------
+_ICONS: dict[str, str] = {
+    "briefcase": '<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:middle"><rect x="2" y="7" width="20" height="14" rx="2" ry="2"/><path d="M16 3h-8a2 2 0 0 0-2 2v2h12V5a2 2 0 0 0-2-2z"/></svg>',
+    "filter": '<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:middle"><polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"/></svg>',
+    "trending_up": '<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:middle"><polyline points="23 6 13.5 15.5 8.5 10.5 1 18"/><polyline points="17 6 23 6 23 12"/></svg>',
+    "bar_chart": '<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:middle"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>',
+    "smile": '<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:middle"><circle cx="12" cy="12" r="10"/><path d="M8 14s1.5 2 4 2 4-2 4-2"/><line x1="9" y1="9" x2="9.01" y2="9"/><line x1="15" y1="9" x2="15.01" y2="9"/></svg>',
+    "pie_chart": '<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:middle"><path d="M21.21 15.89A10 10 0 1 1 8 2.83"/><path d="M22 12A10 10 0 0 0 12 2v10z"/></svg>',
+    "flame": '<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#e65100" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:middle"><path d="M12 22c-4.97 0-9-2.69-9-6 0-4 5-11 9-14 4 3 9 10 9 14 0 3.31-4.03 6-9 6z"/></svg>',
+    "table": '<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:middle"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="3" y1="15" x2="21" y2="15"/><line x1="9" y1="3" x2="9" y2="21"/><line x1="15" y1="3" x2="15" y2="21"/></svg>',
+    "external_link": '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:middle"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>',
+    "thumb_up": '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:middle"><path d="M14 9V5a3 3 0 0 0-6 0v4"/><path d="M2 11h3v10H2z"/><path d="M5 21h9.5a2.5 2.5 0 0 0 2.45-2l1.55-7.8A2 2 0 0 0 16.56 9H10V5a1 1 0 0 0-1-1l-4 7v10"/></svg>',
+    "message": '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:middle"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>',
+    "forum": '<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:middle"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>',
+    "code": '<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:middle"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>',
+    "clock": '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:middle"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>',
+    "info": '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:middle"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>',
+}
+
+
+def icon(name: str) -> str:
+    """Return an inline SVG icon by name.
+
+    Args:
+        name: Icon identifier key from _ICONS.
+
+    Returns:
+        HTML string with the inline SVG, or empty string if not found.
+    """
+    return _ICONS.get(name, "")
+
+
+# ---------------------------------------------------------------------------
 # Page configuration
 # ---------------------------------------------------------------------------
 st.set_page_config(
     page_title="Reddit Job Intelligence",
-    page_icon="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><path fill='%234A90D9' d='M20 6h-4V4c0-1.1-.9-2-2-2h-4c-1.1 0-2 .9-2 2v2H4c-1.1 0-2 .9-2 2v11c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2zM10 4h4v2h-4V4z'/></svg>",
+    page_icon="briefcase",
     layout="wide",
     initial_sidebar_state="expanded",
 )
@@ -33,16 +67,9 @@ st.set_page_config(
 # ---------------------------------------------------------------------------
 st.markdown("""
 <style>
-    /* Import Material Icons */
-    @import url('https://fonts.googleapis.com/icon?family=Material+Icons');
-    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
-
     .main .block-container {
         padding-top: 1.5rem;
         max-width: 1200px;
-    }
-    h1, h2, h3 {
-        font-family: 'Inter', sans-serif;
     }
     .metric-card {
         background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
@@ -62,15 +89,8 @@ st.markdown("""
         font-size: 0.85rem;
         opacity: 0.9;
     }
-    .icon-header {
-        display: flex;
-        align-items: center;
-        gap: 0.5rem;
-        margin-bottom: 0.5rem;
-    }
-    .icon-header .material-icons {
-        font-size: 1.5rem;
-        color: #667eea;
+    .metric-card svg {
+        stroke: white;
     }
     .hot-job-card {
         border: 1px solid #e0e0e0;
@@ -101,14 +121,10 @@ st.markdown("""
         font-size: 0.75rem;
         margin: 2px;
     }
-    .sidebar .sidebar-content {
-        background: #f8f9fa;
-    }
     div[data-testid="stSidebar"] {
         background: #f8f9fa;
     }
 </style>
-<link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet">
 """, unsafe_allow_html=True)
 
 
@@ -149,21 +165,13 @@ def load_data() -> tuple[pd.DataFrame, pd.DataFrame]:
 
 
 # ---------------------------------------------------------------------------
-# Helper to render Material icons
-# ---------------------------------------------------------------------------
-def icon(name: str) -> str:
-    """Return an inline Material Icon span."""
-    return f'<span class="material-icons" style="vertical-align: middle;">{name}</span>'
-
-
-# ---------------------------------------------------------------------------
 # Main dashboard
 # ---------------------------------------------------------------------------
 def main() -> None:
     """Render the full dashboard."""
     # Header
     st.markdown(
-        f"""<h1 style="margin-bottom:0;">{icon("work")} Reddit Job Intelligence</h1>
+        f"""<h1 style="margin-bottom:0;">{icon("briefcase")} Reddit Job Intelligence</h1>
         <p style="color: #888; margin-top: 0.2rem;">
             Automated daily insights from Reddit job communities
         </p>""",
@@ -194,7 +202,7 @@ def main() -> None:
 
     # ----- Sidebar filters -----
     with st.sidebar:
-        st.markdown(f'### {icon("filter_list")} Filters', unsafe_allow_html=True)
+        st.markdown(f'### {icon("filter")} Filters', unsafe_allow_html=True)
 
         # Job type filter
         job_types = sorted(job_posts["job_type"].dropna().unique()) if "job_type" in job_posts.columns else []
@@ -214,7 +222,7 @@ def main() -> None:
 
         st.markdown("---")
         st.markdown(
-            f'<small>{icon("schedule")} Data refreshes daily</small>',
+            f'<small>{icon("clock")} Data refreshes daily</small>',
             unsafe_allow_html=True,
         )
 
@@ -236,7 +244,7 @@ def main() -> None:
         st.markdown(
             f"""<div class="metric-card">
                 <h3>{len(filtered)}</h3>
-                <p>{icon("work")} Job Posts</p>
+                <p>{icon("briefcase")} Job Posts</p>
             </div>""",
             unsafe_allow_html=True,
         )
@@ -245,7 +253,7 @@ def main() -> None:
         st.markdown(
             f"""<div class="metric-card">
                 <h3>{avg_sentiment:.2f}</h3>
-                <p>{icon("sentiment_satisfied")} Avg Sentiment</p>
+                <p>{icon("smile")} Avg Sentiment</p>
             </div>""",
             unsafe_allow_html=True,
         )
@@ -329,7 +337,7 @@ def main() -> None:
 
     with chart_col3:
         st.markdown(
-            f'#### {icon("mood")} Sentiment Distribution',
+            f'#### {icon("smile")} Sentiment Distribution',
             unsafe_allow_html=True,
         )
         if not filtered.empty and "sentiment_score" in filtered.columns:
@@ -378,7 +386,7 @@ def main() -> None:
     # ----- Hot Jobs Today -----
     st.markdown("---")
     st.markdown(
-        f'### {icon("local_fire_department")} Hot Jobs Today',
+        f'### {icon("flame")} Hot Jobs Today',
         unsafe_allow_html=True,
     )
     st.caption("High urgency + positive sentiment posts")
@@ -409,12 +417,12 @@ def main() -> None:
             st.markdown(
                 f"""<div class="hot-job-card">
                     <h4><a href="{row['post_url']}" target="_blank">
-                        {icon("open_in_new")} {row['title'][:100]}
+                        {icon("external_link")} {row['title'][:100]}
                     </a></h4>
                     <small style="color: #888;">
                         r/{row['subreddit']} &middot;
                         {icon("thumb_up")} {row.get('score', 0)} &middot;
-                        {icon("comment")} {row.get('num_comments', 0)}
+                        {icon("message")} {row.get('num_comments', 0)}
                         {(' &middot; ' + meta_line) if meta_line else ''}
                     </small><br>
                     {tech_tags}
@@ -427,7 +435,7 @@ def main() -> None:
     # ----- All Jobs Table -----
     st.markdown("---")
     st.markdown(
-        f'### {icon("table_chart")} All Job Listings',
+        f'### {icon("table")} All Job Listings',
         unsafe_allow_html=True,
     )
 
