@@ -162,3 +162,32 @@ class TestDatabase:
 
         ids = get_existing_post_ids("forhire")
         assert ids == set()
+
+    def test_get_unprocessed_posts_returns_dicts(self):
+        """get_unprocessed_posts should return a list of dicts."""
+        from src.pipeline.run import get_unprocessed_posts
+
+        insert_post(SAMPLE_POST)
+        posts = get_unprocessed_posts()
+        assert len(posts) == 1
+        assert isinstance(posts[0], dict)
+        assert posts[0]["post_id"] == "abc123"
+        assert posts[0]["title"] == SAMPLE_POST["title"]
+
+    def test_get_unprocessed_posts_excludes_classified(self):
+        """get_unprocessed_posts should exclude already-classified posts."""
+        from src.pipeline.run import get_unprocessed_posts
+
+        insert_post(SAMPLE_POST)
+        insert_classification({
+            "post_id": "abc123",
+            "is_job": True,
+            "job_type": "Full-time",
+            "seniority": "Senior",
+            "domain": "Software",
+            "work_mode": "Remote",
+            "sentiment_score": 0.5,
+            "urgency_score": 0.3,
+        })
+        posts = get_unprocessed_posts()
+        assert len(posts) == 0

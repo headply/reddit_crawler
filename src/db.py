@@ -144,7 +144,12 @@ def execute_query(
     """
     conn = get_connection()
     try:
-        cursor = conn.cursor()
+        if fetch and _is_postgres():
+            import psycopg2.extras
+
+            cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        else:
+            cursor = conn.cursor()
         cursor.execute(query, params or ())
         if fetch:
             results = cursor.fetchall()
