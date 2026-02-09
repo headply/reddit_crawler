@@ -137,9 +137,27 @@ def load_data() -> tuple[pd.DataFrame, pd.DataFrame]:
 
     Returns:
         Tuple of (jobs DataFrame, tech stack DataFrame).
+
+    Raises:
+        ConnectionError: Re-raised with user-friendly context when the
+            database is unreachable so Streamlit can display it cleanly.
     """
     init_db()
-    conn = get_connection()
+    try:
+        conn = get_connection()
+    except (ConnectionError, ImportError, OSError) as exc:
+        raise ConnectionError(
+            "**Could not connect to the database.**\n\n"
+            "If you are deploying on Streamlit Cloud with Supabase PostgreSQL, "
+            "make sure you have added `DATABASE_URL` to your "
+            "[Streamlit secrets](https://docs.streamlit.io/deploy/streamlit-community-cloud/deploy-your-app/secrets-management) "
+            "using the connection string from your Supabase project settings.\n\n"
+            "Example `.streamlit/secrets.toml`:\n"
+            "```\n"
+            'DATABASE_URL = "postgresql://postgres.<ref>:<password>@aws-0-<region>.pooler.supabase.com:6543/postgres"\n'
+            "```\n\n"
+            f"Original error: {exc}"
+        ) from exc
     try:
         jobs_df = pd.read_sql_query(
             """SELECT p.post_id, p.title, p.body, p.author, p.subreddit,
@@ -178,7 +196,11 @@ def main() -> None:
         unsafe_allow_html=True,
     )
 
-    jobs_df, tech_df = load_data()
+    try:
+        jobs_df, tech_df = load_data()
+    except ConnectionError as exc:
+        st.error(str(exc))
+        return
 
     if jobs_df.empty:
         st.info("No data available yet. Run the pipeline first to populate the database.")
