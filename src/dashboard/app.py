@@ -57,7 +57,7 @@ def icon(name: str) -> str:
 # ---------------------------------------------------------------------------
 st.set_page_config(
     page_title="Reddit Job Intelligence",
-    page_icon="briefcase",
+    page_icon="\U0001F4BC",
     layout="wide",
     initial_sidebar_state="expanded",
 )
