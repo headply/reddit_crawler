@@ -2,20 +2,70 @@
 
 Handles PostgreSQL connections via psycopg2 and common database operations.
 Falls back to SQLite for local development if DATABASE_URL starts with 'sqlite'.
+
+Supports configuration via:
+  1. Streamlit secrets (st.secrets["DATABASE_URL"]) — for Streamlit Cloud
+  2. Environment variables (os.getenv) — for GitHub Actions / containers
+  3. .env file (python-dotenv) — for local development
+  4. Default: SQLite at data/reddit_jobs.db
 """
 
+import logging
 import os
 from pathlib import Path
 from typing import Any, Optional
-from urllib.parse import urlparse
 
-DATABASE_URL: str = os.getenv("DATABASE_URL", "sqlite:///data/reddit_jobs.db")
+from dotenv import load_dotenv
+
+load_dotenv()
+
+logger = logging.getLogger(__name__)
+
+_DEFAULT_DB_URL = "sqlite:///data/reddit_jobs.db"
 SCHEMA_PATH: Path = Path(__file__).resolve().parent.parent / "data" / "schema.sql"
+
+
+def _resolve_database_url() -> str:
+    """Resolve the database URL from available configuration sources.
+
+    Priority:
+        1. Streamlit secrets (st.secrets)
+        2. OS environment variable
+        3. Default SQLite path
+
+    Returns:
+        Database connection URL string.
+    """
+    # 1. Try Streamlit secrets first (works on Streamlit Cloud)
+    try:
+        import streamlit as st
+
+        url = st.secrets.get("DATABASE_URL")
+        if url:
+            logger.info("DATABASE_URL loaded from Streamlit secrets.")
+            return url
+    except (ImportError, AttributeError, FileNotFoundError):
+        pass
+
+    # 2. Fall back to OS environment variable (.env already loaded above)
+    url = os.getenv("DATABASE_URL")
+    if url:
+        logger.info("DATABASE_URL loaded from environment variable.")
+        return url
+
+    # 3. Default to local SQLite
+    logger.info("No DATABASE_URL found; defaulting to local SQLite.")
+    return _DEFAULT_DB_URL
+
+
+DATABASE_URL: str = _resolve_database_url()
 
 
 def _is_postgres() -> bool:
     """Check if the configured database is PostgreSQL."""
-    return DATABASE_URL.startswith("postgresql://") or DATABASE_URL.startswith("postgres://")
+    return DATABASE_URL.startswith("postgresql://") or DATABASE_URL.startswith(
+        "postgres://"
+    )
 
 
 def get_connection():
@@ -23,14 +73,29 @@ def get_connection():
 
     Returns PostgreSQL connection if DATABASE_URL is a postgres URI,
     otherwise falls back to SQLite for local development.
+
+    Raises:
+        ConnectionError: If PostgreSQL connection fails with a helpful message.
     """
     if _is_postgres():
         import psycopg2
         import psycopg2.extras
 
-        conn = psycopg2.connect(DATABASE_URL)
-        conn.autocommit = False
-        return conn
+        try:
+            conn = psycopg2.connect(DATABASE_URL)
+            conn.autocommit = False
+            return conn
+        except psycopg2.OperationalError as e:
+            logger.error("Failed to connect to PostgreSQL: %s", e)
+            raise ConnectionError(
+                "Could not connect to PostgreSQL. Please verify:\n"
+                "  1. DATABASE_URL is correct in your Streamlit secrets or .env\n"
+                "  2. The PostgreSQL server is running and reachable\n"
+                "  3. Your credentials (user/password) are valid\n"
+                "  4. The database exists and accepts connections\n\n"
+                f"Current DATABASE_URL starts with: {DATABASE_URL[:25]}...\n\n"
+                f"Original error: {e}"
+            ) from e
     else:
         import sqlite3
 
