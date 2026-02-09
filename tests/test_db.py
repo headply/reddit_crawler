@@ -144,3 +144,21 @@ class TestDatabase:
         insert_post(SAMPLE_POST)
         rows = execute_query("SELECT COUNT(*) as cnt FROM posts", fetch=True)
         assert rows[0]["cnt"] == 1
+
+    def test_get_existing_post_ids(self):
+        """get_existing_post_ids should return set of post IDs for a subreddit."""
+        from src.scrape.reddit_scraper import get_existing_post_ids
+
+        insert_post(SAMPLE_POST)
+        other_post = {**SAMPLE_POST, "post_id": "xyz789", "subreddit": "other"}
+        insert_post(other_post)
+
+        ids = get_existing_post_ids("forhire")
+        assert ids == {"abc123"}
+
+    def test_get_existing_post_ids_empty(self):
+        """get_existing_post_ids should return empty set when no posts exist."""
+        from src.scrape.reddit_scraper import get_existing_post_ids
+
+        ids = get_existing_post_ids("forhire")
+        assert ids == set()
