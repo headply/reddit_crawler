@@ -819,7 +819,9 @@ def render_tech_trends(f: pd.DataFrame, tech: pd.DataFrame) -> None:
                 aspect="auto",
                 text_auto=True,
             )
-        except TypeError:
+        except TypeError as exc:
+            if "text_auto" not in str(exc):
+                raise
             fig = px.imshow(
                 pivot,
                 color_continuous_scale=["#F8FAFC", "#1E3A5F"],
@@ -833,8 +835,9 @@ def render_tech_trends(f: pd.DataFrame, tech: pd.DataFrame) -> None:
         )
         try:
             fig.update_traces(textfont_size=10)
-        except TypeError:
-            pass
+        except TypeError as exc:
+            if "textfont_size" not in str(exc):
+                raise
         st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
 
     st.markdown('<div class="sec-head" style="margin-top:1.25rem">Common Tech Combinations</div>',
