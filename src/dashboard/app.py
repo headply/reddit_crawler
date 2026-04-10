@@ -56,7 +56,7 @@ st.markdown("""
 html, body, [class*="css"] {
     font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
 }
-#MainMenu, footer, header { visibility: hidden; }
+#MainMenu, footer, header { display: none !important; }
 
 /* ── Layout ── */
 [data-testid="stAppViewContainer"] > .main { background: #F1F5F9; }
