@@ -358,16 +358,15 @@ _COLORS = ["#1E3A5F", "#2563EB", "#0EA5E9", "#06B6D4", "#10B981", "#8B5CF6", "#F
 
 def _base_layout(**kw):
     _ax = dict(showgrid=True, gridcolor="#F1F5F9", linecolor="#E2E8F0", tickcolor="rgba(0,0,0,0)")
-    xax = {**_ax, **kw.pop("xaxis", {})}
-    yax = {**_ax, **kw.pop("yaxis", {})}
-    showlegend = kw.pop("showlegend", False)
-    return dict(
-        plot_bgcolor="white", paper_bgcolor="white",
-        font=_FONT, margin=_MARGIN,
-        xaxis=xax, yaxis=yax,
-        showlegend=showlegend,
-        **kw,
-    )
+    layout = {
+        "plot_bgcolor": "white", "paper_bgcolor": "white",
+        "font": _FONT, "margin": _MARGIN,
+        "showlegend": kw.pop("showlegend", False),
+        "xaxis": {**_ax, **kw.pop("xaxis", {})},
+        "yaxis": {**_ax, **kw.pop("yaxis", {})},
+    }
+    layout.update(kw)  # xaxis_title, yaxis_title, legend, height, etc.
+    return layout
 
 
 # ── Data ───────────────────────────────────────────────────────────────────
@@ -566,8 +565,10 @@ def render_browse(f: pd.DataFrame, tech: pd.DataFrame) -> None:
         if isinstance(body, str) and body.strip():
             raw = body.strip()
             raw = raw.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-            # Escape markdown control chars that break HTML rendering inside st.markdown
-            raw = raw.replace("`", "&#96;").replace("*", "&#42;").replace("_", "&#95;")
+            # Escape markdown control chars — backtick/tilde open code fences which swallow
+            # the closing </div> and render it as literal text inside the code block
+            raw = (raw.replace("`", "&#96;").replace("~", "&#126;")
+                      .replace("*", "&#42;").replace("_", "&#95;"))
             excerpt = raw[:230] + ("…" if len(raw) > 230 else "")
 
         posted = _ago(r["created_utc"]) if pd.notna(r.get("created_utc")) else ""
