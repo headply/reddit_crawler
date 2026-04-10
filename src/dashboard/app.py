@@ -812,15 +812,29 @@ def render_tech_trends(f: pd.DataFrame, tech: pd.DataFrame) -> None:
                  .reset_index(name="n")
                  .pivot(index="domain", columns="technology", values="n")
                  .fillna(0))
-        fig = px.imshow(pivot, color_continuous_scale=["#F8FAFC", "#1E3A5F"],
-                        aspect="auto", text_auto=True)
+        try:
+            fig = px.imshow(
+                pivot,
+                color_continuous_scale=["#F8FAFC", "#1E3A5F"],
+                aspect="auto",
+                text_auto=True,
+            )
+        except TypeError:
+            fig = px.imshow(
+                pivot,
+                color_continuous_scale=["#F8FAFC", "#1E3A5F"],
+                aspect="auto",
+            )
         fig.update_layout(
             plot_bgcolor="white", paper_bgcolor="white", font=_FONT,
             margin=dict(l=4, r=4, t=4, b=4),
-            coloraxis_showscale=False, xaxis_title="", yaxis_title="",
+            coloraxis=dict(showscale=False), xaxis_title="", yaxis_title="",
             height=400,
         )
-        fig.update_traces(textfont_size=10)
+        try:
+            fig.update_traces(textfont_size=10)
+        except TypeError:
+            pass
         st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
 
     st.markdown('<div class="sec-head" style="margin-top:1.25rem">Common Tech Combinations</div>',
