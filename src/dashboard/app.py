@@ -60,7 +60,7 @@ html, body, [class*="css"] {
 
 /* ── Layout ── */
 [data-testid="stAppViewContainer"] > .main { background: #F1F5F9; }
-.main .block-container { padding: 0 !important; max-width: 100% !important; }
+.main .block-container { padding: 0 2rem 2rem !important; max-width: 100% !important; }
 
 /* ── Top bar ── */
 .topbar {
@@ -73,6 +73,8 @@ html, body, [class*="css"] {
     position: sticky;
     top: 0;
     z-index: 100;
+    margin-left: -2rem;
+    margin-right: -2rem;
 }
 .topbar-left { display: flex; align-items: center; gap: 0.75rem; }
 .topbar-logo {
@@ -277,15 +279,18 @@ html, body, [class*="css"] {
     flex-direction: row !important; gap: 0.3rem !important; flex-wrap: wrap !important;
 }
 [data-testid="stSidebar"] [data-testid="stRadio"] label {
-    background: #F8FAFC; border: 1px solid #E2E8F0;
-    border-radius: 6px; padding: 4px 10px;
-    font-size: 0.72rem !important; color: #475569;
-    cursor: pointer; transition: all 0.1s;
+    background: #E2E8F0; border: 1.5px solid #CBD5E1;
+    border-radius: 6px; padding: 5px 11px;
+    font-size: 0.73rem !important; color: #1E293B !important;
+    font-weight: 500 !important;
+    cursor: pointer; transition: all 0.12s;
 }
 [data-testid="stSidebar"] [data-testid="stRadio"] label:has(input:checked) {
     background: #1E3A5F !important; color: #fff !important; border-color: #1E3A5F !important;
 }
-[data-testid="stSidebar"] [data-testid="stRadio"] input { display: none !important; }
+[data-testid="stSidebar"] [data-testid="stRadio"] input {
+    position: absolute !important; opacity: 0 !important; pointer-events: none !important;
+}
 
 /* Expander clean-up */
 [data-testid="stSidebar"] [data-testid="stExpander"] {
@@ -367,8 +372,8 @@ def _base_layout(**kw):
     return dict(
         plot_bgcolor="white", paper_bgcolor="white",
         font=_FONT, margin=_MARGIN,
-        xaxis=dict(showgrid=True, gridcolor="#F1F5F9", linecolor="#E2E8F0", tickcolor="transparent"),
-        yaxis=dict(showgrid=True, gridcolor="#F1F5F9", linecolor="#E2E8F0", tickcolor="transparent"),
+        xaxis=dict(showgrid=True, gridcolor="#F1F5F9", linecolor="#E2E8F0", tickcolor="rgba(0,0,0,0)"),
+        yaxis=dict(showgrid=True, gridcolor="#F1F5F9", linecolor="#E2E8F0", tickcolor="rgba(0,0,0,0)"),
         showlegend=False,
         **kw,
     )
@@ -447,25 +452,30 @@ def render_sidebar(jobs: pd.DataFrame, tech: pd.DataFrame) -> pd.DataFrame:
             unsafe_allow_html=True,
         )
 
-        domains    = sorted(jobs["domain"].dropna().unique())
-        sel_domain = st.multiselect("Domain", domains, default=domains, label_visibility="collapsed",
-                                    placeholder="All domains")
+        domains = sorted(jobs["domain"].dropna().unique())
+        with st.expander("Domain"):
+            sel_domain = st.multiselect("", domains, default=domains, label_visibility="collapsed",
+                                        placeholder="All domains")
 
-        types      = sorted(jobs["job_type"].dropna().unique())
-        sel_type   = st.multiselect("Job Type", types, default=types, label_visibility="collapsed",
-                                    placeholder="All types")
+        types = sorted(jobs["job_type"].dropna().unique())
+        with st.expander("Job Type"):
+            sel_type = st.multiselect("", types, default=types, label_visibility="collapsed",
+                                      placeholder="All types")
 
-        levels     = sorted(jobs["seniority"].dropna().unique())
-        sel_level  = st.multiselect("Seniority", levels, default=levels, label_visibility="collapsed",
-                                    placeholder="All levels")
+        levels = sorted(jobs["seniority"].dropna().unique())
+        with st.expander("Seniority"):
+            sel_level = st.multiselect("", levels, default=levels, label_visibility="collapsed",
+                                       placeholder="All levels")
 
-        modes      = sorted(jobs["work_mode"].dropna().unique())
-        sel_mode   = st.multiselect("Work Mode", modes, default=modes, label_visibility="collapsed",
-                                    placeholder="All modes")
+        modes = sorted(jobs["work_mode"].dropna().unique())
+        with st.expander("Work Mode"):
+            sel_mode = st.multiselect("", modes, default=modes, label_visibility="collapsed",
+                                      placeholder="All modes")
 
-        all_techs  = sorted(tech["technology"].unique()) if not tech.empty else []
-        sel_tech   = st.multiselect("Tech Stack", all_techs, label_visibility="collapsed",
-                                    placeholder="Any technology")
+        all_techs = sorted(tech["technology"].unique()) if not tech.empty else []
+        with st.expander("Tech Stack"):
+            sel_tech = st.multiselect("", all_techs, label_visibility="collapsed",
+                                      placeholder="Any technology")
 
         with st.expander("Subreddit"):
             subs     = sorted(jobs["subreddit"].dropna().unique())
@@ -635,7 +645,7 @@ def render_analytics(f: pd.DataFrame, tech: pd.DataFrame) -> None:
         fig = px.bar(subs, x="n", y="Subreddit", orientation="h", color_discrete_sequence=["#2563EB"])
         fig.update_layout(**_base_layout(xaxis_title="Posts", yaxis_title="",
                                          yaxis=dict(autorange="reversed", gridcolor="#F1F5F9",
-                                                    linecolor="#E2E8F0", tickcolor="transparent")))
+                                                    linecolor="#E2E8F0", tickcolor="rgba(0,0,0,0)")))
         chart_wrap(fig)
 
     r2a, r2b = st.columns(2)
@@ -693,7 +703,7 @@ def render_analytics(f: pd.DataFrame, tech: pd.DataFrame) -> None:
             fig = px.bar(t, x="n", y="Type", orientation="h", color_discrete_sequence=["#0EA5E9"])
             fig.update_layout(**_base_layout(xaxis_title="Posts", yaxis_title="",
                                              yaxis=dict(autorange="reversed", gridcolor="#F1F5F9",
-                                                        linecolor="#E2E8F0", tickcolor="transparent")))
+                                                        linecolor="#E2E8F0", tickcolor="rgba(0,0,0,0)")))
             chart_wrap(fig, 280)
 
     st.markdown('<div class="sec-head" style="margin-top:1rem">Top 20 In-Demand Skills</div>', unsafe_allow_html=True)
@@ -706,7 +716,7 @@ def render_analytics(f: pd.DataFrame, tech: pd.DataFrame) -> None:
         fig.update_layout(
             **_base_layout(xaxis_title="Mentions", yaxis_title="",
                            yaxis=dict(autorange="reversed", gridcolor="#F1F5F9",
-                                      linecolor="#E2E8F0", tickcolor="transparent")),
+                                      linecolor="#E2E8F0", tickcolor="rgba(0,0,0,0)")),
             height=520, coloraxis_showscale=False,
         )
         st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
@@ -813,8 +823,6 @@ def main() -> None:
         unsafe_allow_html=True,
     )
 
-    st.markdown('<div class="content-wrap">', unsafe_allow_html=True)
-
     render_kpis(filtered, tech)
 
     tab1, tab2, tab3 = st.tabs(["Browse Jobs", "Analytics", "Tech Trends"])
@@ -825,8 +833,6 @@ def main() -> None:
         render_analytics(filtered, tech)
     with tab3:
         render_tech_trends(filtered, tech)
-
-    st.markdown('</div>', unsafe_allow_html=True)
 
 
 if __name__ == "__main__":
