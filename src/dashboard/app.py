@@ -56,7 +56,7 @@ st.markdown("""
 html, body, [class*="css"] {
     font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
 }
-#MainMenu, footer, header { display: none !important; }
+#MainMenu, footer { display: none !important; }
 
 /* ── Layout ── */
 .stApp,
@@ -70,6 +70,15 @@ html, body, [class*="css"] {
     color: #0F172A !important;
 }
 .main .block-container { padding: 0 2rem 2rem !important; max-width: 100% !important; }
+[data-testid="collapsedControl"] {
+    background: #FFFFFF !important;
+    border: 1px solid #CBD5E1 !important;
+    border-radius: 8px !important;
+    box-shadow: 0 1px 4px rgba(15, 23, 42, 0.08) !important;
+}
+[data-testid="collapsedControl"] svg {
+    stroke: #0F172A !important;
+}
 
 /* ── Top bar ── */
 .topbar {
@@ -627,12 +636,24 @@ def render_browse(f: pd.DataFrame, tech: pd.DataFrame) -> None:
     total = len(df)
     pages = max(1, (total + PAGE - 1) // PAGE)
 
-    col_a, col_b = st.columns([4, 1])
+    if "browse_page" not in st.session_state:
+        st.session_state["browse_page"] = 1
+    st.session_state["browse_page"] = min(max(int(st.session_state["browse_page"]), 1), pages)
+
+    col_a, col_b, col_c, col_d = st.columns([4, 1.2, 0.8, 0.8])
     with col_a:
         st.markdown(f'<div class="pg-info">{total:,} listings found</div>', unsafe_allow_html=True)
     with col_b:
-        page = int(st.number_input("", min_value=1, max_value=pages, value=1,
-                                   step=1, label_visibility="collapsed"))
+        page = int(st.number_input("Page", min_value=1, max_value=pages, value=st.session_state["browse_page"],
+                                   step=1, key="browse_page_input", label_visibility="collapsed"))
+    with col_c:
+        if st.button("◀ Prev", use_container_width=True, disabled=page <= 1, key="browse_prev"):
+            page -= 1
+    with col_d:
+        if st.button("Next ▶", use_container_width=True, disabled=page >= pages, key="browse_next"):
+            page += 1
+    page = min(max(page, 1), pages)
+    st.session_state["browse_page"] = page
 
     slice_df = df.iloc[(page - 1) * PAGE: page * PAGE]
 
@@ -644,7 +665,11 @@ def render_browse(f: pd.DataFrame, tech: pd.DataFrame) -> None:
             + _sen_badge(r.get("seniority"))
             + _type_badge(r.get("job_type"))
         )
-        tech_html = "".join(f'<span class="tpill">{t}</span>' for t in techs[:12])
+        tech_html = "".join(
+            f"<span class='tpill'>{str(t).replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')}</span>"
+            for t in techs[:12]
+            if isinstance(t, str) and t.strip()
+        )
         body = (r.get("body") or "")
         excerpt = ""
         if isinstance(body, str) and body.strip():
