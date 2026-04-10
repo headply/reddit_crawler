@@ -274,22 +274,10 @@ html, body, [class*="css"] {
 }
 [data-testid="stSidebar"] [data-baseweb="tag"] span { color: #1D4ED8 !important; font-size: 0.7rem !important; }
 
-/* Radio as date selector */
-[data-testid="stSidebar"] [data-testid="stRadio"] > div {
-    flex-direction: row !important; gap: 0.3rem !important; flex-wrap: wrap !important;
-}
-[data-testid="stSidebar"] [data-testid="stRadio"] label {
-    background: #E2E8F0; border: 1.5px solid #CBD5E1;
-    border-radius: 6px; padding: 5px 11px;
-    font-size: 0.73rem !important; color: #1E293B !important;
-    font-weight: 500 !important;
-    cursor: pointer; transition: all 0.12s;
-}
-[data-testid="stSidebar"] [data-testid="stRadio"] label:has(input:checked) {
-    background: #1E3A5F !important; color: #fff !important; border-color: #1E3A5F !important;
-}
-[data-testid="stSidebar"] [data-testid="stRadio"] input {
-    position: absolute !important; opacity: 0 !important; pointer-events: none !important;
+/* Pills (date range selector) */
+[data-testid="stSidebar"] [data-testid="stPills"] button {
+    font-size: 0.73rem !important; font-weight: 500 !important;
+    border-radius: 6px !important; padding: 4px 11px !important;
 }
 
 /* Expander clean-up */
@@ -369,11 +357,13 @@ _MARGIN = dict(l=4, r=4, t=28, b=4)
 _COLORS = ["#1E3A5F", "#2563EB", "#0EA5E9", "#06B6D4", "#10B981", "#8B5CF6", "#F59E0B", "#EF4444"]
 
 def _base_layout(**kw):
+    _ax = dict(showgrid=True, gridcolor="#F1F5F9", linecolor="#E2E8F0", tickcolor="rgba(0,0,0,0)")
+    xax = {**_ax, **kw.pop("xaxis", {})}
+    yax = {**_ax, **kw.pop("yaxis", {})}
     return dict(
         plot_bgcolor="white", paper_bgcolor="white",
         font=_FONT, margin=_MARGIN,
-        xaxis=dict(showgrid=True, gridcolor="#F1F5F9", linecolor="#E2E8F0", tickcolor="rgba(0,0,0,0)"),
-        yaxis=dict(showgrid=True, gridcolor="#F1F5F9", linecolor="#E2E8F0", tickcolor="rgba(0,0,0,0)"),
+        xaxis=xax, yaxis=yax,
         showlegend=False,
         **kw,
     )
@@ -427,59 +417,48 @@ def render_sidebar(jobs: pd.DataFrame, tech: pd.DataFrame) -> pd.DataFrame:
         )
 
         # Date range
-        st.markdown(
-            f'<div class="sb-section"><div class="sb-label">{ic("calendar", 11, "#94A3B8")} Time Range</div></div>',
-            unsafe_allow_html=True,
+        st.caption("TIME RANGE")
+        date_opt = st.pills(
+            "Time Range",
+            options=["Today", "7 days", "30 days", "All time"],
+            default="30 days",
+            label_visibility="collapsed",
         )
-        with st.container():
-            date_opt = st.radio(
-                "", ["Today", "7 days", "30 days", "All time"],
-                index=2, label_visibility="collapsed",
-            )
+        if date_opt is None:
+            date_opt = "30 days"
 
         # Search
-        st.markdown(
-            f'<div class="sb-section" style="padding-top:0.75rem"><div class="sb-label">{ic("search", 11, "#94A3B8")} Search</div></div>',
-            unsafe_allow_html=True,
-        )
+        st.caption("SEARCH")
         keyword = st.text_input("", placeholder="Title, skill, company...", label_visibility="collapsed")
 
         st.markdown('<hr class="sb-divider">', unsafe_allow_html=True)
 
         # Filters
-        st.markdown(
-            f'<div class="sb-section"><div class="sb-label">{ic("sliders", 11, "#94A3B8")} Filters</div></div>',
-            unsafe_allow_html=True,
-        )
+        st.caption("FILTERS")
 
         domains = sorted(jobs["domain"].dropna().unique())
-        with st.expander("Domain"):
-            sel_domain = st.multiselect("", domains, default=domains, label_visibility="collapsed",
-                                        placeholder="All domains")
+        with st.expander("Domain", expanded=False):
+            sel_domain = [d for d in domains if st.checkbox(d, value=True, key=f"domain_{d}")]
 
         types = sorted(jobs["job_type"].dropna().unique())
-        with st.expander("Job Type"):
-            sel_type = st.multiselect("", types, default=types, label_visibility="collapsed",
-                                      placeholder="All types")
+        with st.expander("Job Type", expanded=False):
+            sel_type = [t for t in types if st.checkbox(t, value=True, key=f"type_{t}")]
 
         levels = sorted(jobs["seniority"].dropna().unique())
-        with st.expander("Seniority"):
-            sel_level = st.multiselect("", levels, default=levels, label_visibility="collapsed",
-                                       placeholder="All levels")
+        with st.expander("Seniority", expanded=False):
+            sel_level = [l for l in levels if st.checkbox(l, value=True, key=f"level_{l}")]
 
         modes = sorted(jobs["work_mode"].dropna().unique())
-        with st.expander("Work Mode"):
-            sel_mode = st.multiselect("", modes, default=modes, label_visibility="collapsed",
-                                      placeholder="All modes")
+        with st.expander("Work Mode", expanded=False):
+            sel_mode = [m for m in modes if st.checkbox(m, value=True, key=f"mode_{m}")]
 
         all_techs = sorted(tech["technology"].unique()) if not tech.empty else []
-        with st.expander("Tech Stack"):
-            sel_tech = st.multiselect("", all_techs, label_visibility="collapsed",
-                                      placeholder="Any technology")
+        with st.expander("Tech Stack", expanded=False):
+            sel_tech = [t for t in all_techs if st.checkbox(t, value=False, key=f"tech_{t}")]
 
-        with st.expander("Subreddit"):
+        with st.expander("Subreddit", expanded=False):
             subs     = sorted(jobs["subreddit"].dropna().unique())
-            sel_subs = st.multiselect("", subs, default=subs, label_visibility="collapsed")
+            sel_subs = [s for s in subs if st.checkbox(s, value=True, key=f"sub_{s}")]
 
         st.markdown('<hr class="sb-divider">', unsafe_allow_html=True)
 
@@ -588,16 +567,18 @@ def render_browse(f: pd.DataFrame, tech: pd.DataFrame) -> None:
             excerpt = raw[:230] + ("…" if len(raw) > 230 else "")
 
         posted = _ago(r["created_utc"]) if pd.notna(r.get("created_utc")) else ""
+        title_safe = str(r["title"])[:130].replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+        sub_safe = str(r.get("subreddit", "")).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
         st.markdown(
             f"""<div class="jcard">
                 <div class="jcard-row1">
-                    <a class="jcard-title" href="{r['post_url']}" target="_blank">{r['title'][:130]}</a>
+                    <a class="jcard-title" href="{r['post_url']}" target="_blank">{title_safe}</a>
                     <span class="jcard-ext">{ic("arrow-up-right", 14, "#64748B")}</span>
                 </div>
                 <div class="jcard-badges">{badges}</div>
                 <div class="jcard-meta">
-                    <span class="jcard-meta-item">{ic("users", 12, "#CBD5E1")} r/{r['subreddit']}</span>
+                    <span class="jcard-meta-item">{ic("users", 12, "#CBD5E1")} r/{sub_safe}</span>
                     <span class="jcard-meta-item">{ic("thumbs-up", 12, "#CBD5E1")} {int(r.get('score', 0))}</span>
                     <span class="jcard-meta-item">{ic("message", 12, "#CBD5E1")} {int(r.get('num_comments', 0))}</span>
                     <span class="jcard-meta-item">{ic("clock", 12, "#CBD5E1")} {posted}</span>
