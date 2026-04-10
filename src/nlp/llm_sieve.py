@@ -16,6 +16,49 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
+# Fast keyword pre-filter — runs before any API call
+# ---------------------------------------------------------------------------
+_HARD_REJECT_TITLE = [
+    "advice", "help me", "how do i", "should i", "is it worth",
+    "resume review", "resume help", "interview tips", "interview prep",
+    "career advice", "salary advice", "offer advice",
+    "got laid off", "got fired", "quit my job", "leaving my job",
+    "rejected", "rant", "venting", "frustrated", "burnout",
+    "asking for", "need help", "what should", "anyone else",
+    "did i", "am i", "was i",
+]
+
+_REQUIRED_POSITIVE = [
+    "hiring", "we are hiring", "we're hiring", "looking to hire",
+    "job opening", "open position", "apply", "applications",
+    "salary", "compensation", "equity", "benefits",
+    "full-time", "full time", "contract", "freelance", "internship",
+    "remote ok", "work from home", "join our", "join us",
+    "we need", "seeking a", "looking for a", "[hiring]",
+    "job opportunity", "career opportunity",
+]
+
+
+def _quick_reject(title: str, body: str) -> bool:
+    """Return True if the post can be discarded without an LLM call.
+
+    Conservative — only rejects posts with strong non-job signals
+    AND no positive hiring signals, so genuine edge cases still go to the LLM.
+    """
+    title_lower = title.lower()
+    text_lower = f"{title} {body[:300]}".lower()
+
+    # Any hard reject phrase in the title is enough to skip
+    if any(p in title_lower for p in _HARD_REJECT_TITLE):
+        return True
+
+    # If there is not a single positive hiring signal anywhere, skip
+    if not any(p in text_lower for p in _REQUIRED_POSITIVE):
+        return True
+
+    return False
+
+# ---------------------------------------------------------------------------
 # System prompt — defines the classification contract
 # ---------------------------------------------------------------------------
 _SYSTEM_PROMPT = """You are a job posting classifier for a Reddit job intelligence platform.
@@ -116,31 +159,51 @@ def classify_post(post: dict[str, Any]) -> dict[str, Any]:
 
 def classify_posts_batch(
     posts: list[dict[str, Any]],
-    max_workers: int = 10,
+    max_workers: int = 20,
 ) -> list[dict[str, Any]]:
     """Classify a list of posts concurrently using a thread pool.
 
-    Sends up to max_workers requests to the OpenAI API in parallel,
-    reducing wall-clock time from O(n) sequential to O(n/max_workers).
+    Applies a fast keyword pre-filter first to skip obvious non-jobs
+    without making any API call, then classifies the remainder in parallel.
 
     Args:
         posts: List of post dicts.
-        max_workers: Number of parallel API calls (default 10).
+        max_workers: Number of parallel API calls (default 20).
 
     Returns:
-        List of successfully classified results in original order.
+        List of successfully classified results (jobs and non-jobs).
         Failed posts are skipped and logged.
     """
     from concurrent.futures import ThreadPoolExecutor, as_completed
 
-    total = len(posts)
-    logger.info("Classifying %d posts with %d parallel workers.", total, max_workers)
+    # Pre-filter: mark obvious non-jobs without calling the API
+    to_classify, pre_rejected = [], []
+    for post in posts:
+        if _quick_reject(post.get("title", ""), post.get("body", "") or ""):
+            pre_rejected.append({
+                "post_id": post["post_id"],
+                "is_job": False,
+                "job_type": None, "domain": None, "seniority": None,
+                "work_mode": None, "tech_stack": [],
+                "urgency_score": 0.0, "confidence": 1.0,
+                "sentiment_score": 0.0, "llm_classified": False,
+            })
+        else:
+            to_classify.append(post)
 
-    results: list[dict[str, Any]] = []
+    logger.info(
+        "Pre-filter: %d skipped, %d sent to LLM (of %d total).",
+        len(pre_rejected), len(to_classify), len(posts),
+    )
+
+    results: list[dict[str, Any]] = list(pre_rejected)
+
+    if not to_classify:
+        return results
+
     futures = {}
-
     with ThreadPoolExecutor(max_workers=max_workers) as pool:
-        for post in posts:
+        for post in to_classify:
             future = pool.submit(classify_post, post)
             futures[future] = post.get("post_id")
 
@@ -150,12 +213,12 @@ def classify_posts_batch(
             done += 1
             try:
                 results.append(future.result())
-                if done % 50 == 0 or done == total:
-                    logger.info("Classified %d/%d posts.", done, total)
+                if done % 50 == 0 or done == len(to_classify):
+                    logger.info("LLM classified %d/%d.", done, len(to_classify))
             except Exception as exc:
                 logger.error("Skipping post %s: %s", post_id, exc)
 
-    logger.info("Batch complete: %d/%d classified successfully.", len(results), total)
+    logger.info("Batch complete: %d/%d processed.", len(results), len(posts))
     return results
 
 

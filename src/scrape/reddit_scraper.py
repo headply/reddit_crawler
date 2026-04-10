@@ -127,25 +127,37 @@ def scrape_subreddit(
 def scrape_all(
     subreddits: Optional[list[str]] = None,
     limit: int = POSTS_PER_SUBREDDIT,
+    max_workers: int = 8,
 ) -> list[dict[str, Any]]:
-    """Scrape new posts from all configured subreddits.
+    """Scrape new posts from all configured subreddits in parallel.
 
     Args:
         subreddits: Optional list of subreddit names. Defaults to config.
         limit: Maximum posts per subreddit.
+        max_workers: Number of subreddits to scrape concurrently.
 
     Returns:
         List of all newly scraped post data dictionaries.
     """
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
     target = subreddits or TARGET_SUBREDDITS
     reddit = create_reddit_client()
     all_posts: list[dict[str, Any]] = []
 
-    for sub_name in target:
+    def _scrape(sub_name: str) -> list[dict[str, Any]]:
         logger.info("Scraping r/%s ...", sub_name)
-        new_posts = scrape_subreddit(reddit, sub_name, limit)
-        all_posts.extend(new_posts)
-        logger.info("Found %d new posts in r/%s", len(new_posts), sub_name)
+        posts = scrape_subreddit(reddit, sub_name, limit)
+        logger.info("Found %d new posts in r/%s", len(posts), sub_name)
+        return posts
+
+    with ThreadPoolExecutor(max_workers=max_workers) as pool:
+        futures = {pool.submit(_scrape, sub): sub for sub in target}
+        for future in as_completed(futures):
+            try:
+                all_posts.extend(future.result())
+            except Exception as exc:
+                logger.error("Error scraping r/%s: %s", futures[future], exc)
 
     logger.info("Total new posts scraped: %d", len(all_posts))
     return all_posts
