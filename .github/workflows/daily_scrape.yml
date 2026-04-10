@@ -11,7 +11,7 @@ permissions:
 jobs:
   scrape-and-enrich:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 60
 
     steps:
       - name: Checkout repository

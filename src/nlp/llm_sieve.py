@@ -11,7 +11,6 @@ enrichment module so the pipeline never hard-crashes.
 import json
 import logging
 import os
-import time
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -117,37 +116,46 @@ def classify_post(post: dict[str, Any]) -> dict[str, Any]:
 
 def classify_posts_batch(
     posts: list[dict[str, Any]],
-    delay: float = 0.05,
+    max_workers: int = 10,
 ) -> list[dict[str, Any]]:
-    """Classify a list of posts sequentially, skipping failures.
+    """Classify a list of posts concurrently using a thread pool.
+
+    Sends up to max_workers requests to the OpenAI API in parallel,
+    reducing wall-clock time from O(n) sequential to O(n/max_workers).
 
     Args:
         posts: List of post dicts.
-        delay: Seconds to wait between API calls (rate-limit buffer).
+        max_workers: Number of parallel API calls (default 10).
 
     Returns:
-        List of successfully classified results. Failed posts are skipped
-        and logged rather than crashing the entire batch.
+        List of successfully classified results in original order.
+        Failed posts are skipped and logged.
     """
-    results: list[dict[str, Any]] = []
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
     total = len(posts)
+    logger.info("Classifying %d posts with %d parallel workers.", total, max_workers)
 
-    for i, post in enumerate(posts, start=1):
-        logger.info("Classifying post %d/%d: %s", i, total, post.get("post_id"))
-        try:
-            result = classify_post(post)
-            results.append(result)
-        except Exception as exc:
-            logger.error(
-                "Skipping post %s after error: %s", post.get("post_id"), exc
-            )
+    results: list[dict[str, Any]] = []
+    futures = {}
 
-        if delay > 0 and i < total:
-            time.sleep(delay)
+    with ThreadPoolExecutor(max_workers=max_workers) as pool:
+        for post in posts:
+            future = pool.submit(classify_post, post)
+            futures[future] = post.get("post_id")
 
-    logger.info(
-        "Batch complete: %d/%d posts classified successfully.", len(results), total
-    )
+        done = 0
+        for future in as_completed(futures):
+            post_id = futures[future]
+            done += 1
+            try:
+                results.append(future.result())
+                if done % 50 == 0 or done == total:
+                    logger.info("Classified %d/%d posts.", done, total)
+            except Exception as exc:
+                logger.error("Skipping post %s: %s", post_id, exc)
+
+    logger.info("Batch complete: %d/%d classified successfully.", len(results), total)
     return results
 
 

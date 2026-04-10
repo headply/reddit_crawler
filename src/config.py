@@ -36,7 +36,7 @@ TARGET_SUBREDDITS: Final[list[str]] = [
 ]
 
 # Number of posts to fetch per subreddit per run
-POSTS_PER_SUBREDDIT: Final[int] = 100
+POSTS_PER_SUBREDDIT: Final[int] = 50
 
 # ---------------------------------------------------------------------------
 # Domain categories — used as LLM fallback and for reference
