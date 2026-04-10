@@ -360,11 +360,12 @@ def _base_layout(**kw):
     _ax = dict(showgrid=True, gridcolor="#F1F5F9", linecolor="#E2E8F0", tickcolor="rgba(0,0,0,0)")
     xax = {**_ax, **kw.pop("xaxis", {})}
     yax = {**_ax, **kw.pop("yaxis", {})}
+    showlegend = kw.pop("showlegend", False)
     return dict(
         plot_bgcolor="white", paper_bgcolor="white",
         font=_FONT, margin=_MARGIN,
         xaxis=xax, yaxis=yax,
-        showlegend=False,
+        showlegend=showlegend,
         **kw,
     )
 
@@ -563,7 +564,10 @@ def render_browse(f: pd.DataFrame, tech: pd.DataFrame) -> None:
         body = (r.get("body") or "")
         excerpt = ""
         if isinstance(body, str) and body.strip():
-            raw = body.strip().replace("<", "&lt;").replace(">", "&gt;")
+            raw = body.strip()
+            raw = raw.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+            # Escape markdown control chars that break HTML rendering inside st.markdown
+            raw = raw.replace("`", "&#96;").replace("*", "&#42;").replace("_", "&#95;")
             excerpt = raw[:230] + ("…" if len(raw) > 230 else "")
 
         posted = _ago(r["created_utc"]) if pd.notna(r.get("created_utc")) else ""
