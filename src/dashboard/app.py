@@ -1,10 +1,4 @@
-"""Reddit Job Intelligence -- Streamlit Dashboard.
-
-Three-tab layout:
-  Browse Jobs  -- filterable job cards
-  Analytics    -- charts and breakdowns
-  Tech Trends  -- technology demand over time
-"""
+"""Reddit Job Intelligence -- Streamlit Dashboard."""
 
 import sys
 from datetime import timedelta
@@ -12,158 +6,375 @@ from pathlib import Path
 
 import pandas as pd
 import plotly.express as px
+import plotly.graph_objects as go
 import streamlit as st
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
 from src.db import get_connection, init_db
 
-# ---------------------------------------------------------------------------
-# Page config
-# ---------------------------------------------------------------------------
+# ── Page config ────────────────────────────────────────────────────────────
 st.set_page_config(
-    page_title="Reddit Job Intelligence",
-    page_icon="💼",
+    page_title="Job Intelligence",
+    page_icon="https://cdn-icons-png.flaticon.com/512/3281/3281289.png",
     layout="wide",
     initial_sidebar_state="expanded",
 )
 
-# ---------------------------------------------------------------------------
-# CSS
-# ---------------------------------------------------------------------------
-st.markdown(
-    """
+# ── Icon library (Lucide outline SVG, 16 px default) ──────────────────────
+_I = {
+    "briefcase":    '<svg viewBox="0 0 24 24" fill="none" stroke="{c}" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" width="{s}" height="{s}"><rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 7V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v2"/></svg>',
+    "zap":          '<svg viewBox="0 0 24 24" fill="none" stroke="{c}" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" width="{s}" height="{s}"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>',
+    "globe":        '<svg viewBox="0 0 24 24" fill="none" stroke="{c}" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" width="{s}" height="{s}"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>',
+    "layers":       '<svg viewBox="0 0 24 24" fill="none" stroke="{c}" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" width="{s}" height="{s}"><polygon points="12 2 2 7 12 12 22 7 12 2"/><polyline points="2 17 12 22 22 17"/><polyline points="2 12 12 17 22 12"/></svg>',
+    "cpu":          '<svg viewBox="0 0 24 24" fill="none" stroke="{c}" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" width="{s}" height="{s}"><rect x="4" y="4" width="16" height="16" rx="2"/><rect x="9" y="9" width="6" height="6"/><line x1="9" y1="1" x2="9" y2="4"/><line x1="15" y1="1" x2="15" y2="4"/><line x1="9" y1="20" x2="9" y2="23"/><line x1="15" y1="20" x2="15" y2="23"/><line x1="20" y1="9" x2="23" y2="9"/><line x1="20" y1="14" x2="23" y2="14"/><line x1="1" y1="9" x2="4" y2="9"/><line x1="1" y1="14" x2="4" y2="14"/></svg>',
+    "arrow-up-right":'<svg viewBox="0 0 24 24" fill="none" stroke="{c}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="{s}" height="{s}"><line x1="7" y1="17" x2="17" y2="7"/><polyline points="7 7 17 7 17 17"/></svg>',
+    "thumbs-up":    '<svg viewBox="0 0 24 24" fill="none" stroke="{c}" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" width="{s}" height="{s}"><path d="M14 9V5a3 3 0 0 0-3-3l-4 9v11h11.28a2 2 0 0 0 2-1.7l1.38-9a2 2 0 0 0-2-2.3H14z"/><path d="M7 22H4a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2h3"/></svg>',
+    "message":      '<svg viewBox="0 0 24 24" fill="none" stroke="{c}" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" width="{s}" height="{s}"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>',
+    "clock":        '<svg viewBox="0 0 24 24" fill="none" stroke="{c}" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" width="{s}" height="{s}"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>',
+    "search":       '<svg viewBox="0 0 24 24" fill="none" stroke="{c}" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" width="{s}" height="{s}"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>',
+    "sliders":      '<svg viewBox="0 0 24 24" fill="none" stroke="{c}" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" width="{s}" height="{s}"><line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/><line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/><line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/></svg>',
+    "calendar":     '<svg viewBox="0 0 24 24" fill="none" stroke="{c}" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" width="{s}" height="{s}"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>',
+    "tag":          '<svg viewBox="0 0 24 24" fill="none" stroke="{c}" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" width="{s}" height="{s}"><path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/><line x1="7" y1="7" x2="7.01" y2="7"/></svg>',
+    "trending-up":  '<svg viewBox="0 0 24 24" fill="none" stroke="{c}" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" width="{s}" height="{s}"><polyline points="23 6 13.5 15.5 8.5 10.5 1 18"/><polyline points="17 6 23 6 23 12"/></svg>',
+    "bar-chart":    '<svg viewBox="0 0 24 24" fill="none" stroke="{c}" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" width="{s}" height="{s}"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>',
+    "refresh":      '<svg viewBox="0 0 24 24" fill="none" stroke="{c}" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" width="{s}" height="{s}"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>',
+    "map-pin":      '<svg viewBox="0 0 24 24" fill="none" stroke="{c}" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" width="{s}" height="{s}"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>',
+    "users":        '<svg viewBox="0 0 24 24" fill="none" stroke="{c}" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" width="{s}" height="{s}"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>',
+}
+
+def ic(name: str, size: int = 16, color: str = "currentColor") -> str:
+    return _I.get(name, "").format(s=size, c=color)
+
+
+# ── CSS ────────────────────────────────────────────────────────────────────
+st.markdown("""
 <style>
-[data-testid="stAppViewContainer"] { background: #F4F6FB; }
-.main .block-container { padding-top: 1.2rem; max-width: 1280px; }
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
 
-.kpi-row { display: flex; gap: 1rem; margin-bottom: 1.4rem; flex-wrap: wrap; }
-.kpi-card {
-    flex: 1; min-width: 140px;
-    background: white;
-    border-radius: 14px;
-    padding: 1.1rem 1.2rem;
-    box-shadow: 0 1px 6px rgba(0,0,0,0.07);
-    border-top: 4px solid #6C63FF;
+/* ── Reset ── */
+html, body, [class*="css"] {
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
 }
-.kpi-card.green  { border-top-color: #10B981; }
-.kpi-card.orange { border-top-color: #F59E0B; }
-.kpi-card.pink   { border-top-color: #EC4899; }
-.kpi-card.teal   { border-top-color: #0EA5E9; }
-.kpi-value { font-size: 2rem; font-weight: 700; color: #1E1B4B; line-height: 1; }
-.kpi-label { font-size: 0.78rem; color: #6B7280; margin-top: 0.35rem; }
+#MainMenu, footer, header { visibility: hidden; }
 
-.job-card {
-    background: white;
-    border-radius: 12px;
-    padding: 1.1rem 1.3rem;
-    margin-bottom: 0.9rem;
-    border-left: 4px solid #6C63FF;
-    box-shadow: 0 1px 4px rgba(0,0,0,0.06);
-    transition: box-shadow 0.15s;
+/* ── Layout ── */
+[data-testid="stAppViewContainer"] > .main { background: #F1F5F9; }
+.main .block-container { padding: 0 !important; max-width: 100% !important; }
+
+/* ── Top bar ── */
+.topbar {
+    background: #fff;
+    border-bottom: 1px solid #E2E8F0;
+    padding: 0.9rem 2rem;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    position: sticky;
+    top: 0;
+    z-index: 100;
 }
-.job-card:hover { box-shadow: 0 4px 18px rgba(108,99,255,0.13); }
-.job-card-title { font-size: 0.98rem; font-weight: 600; margin-bottom: 0.4rem; }
-.job-card-title a { color: #1E1B4B; text-decoration: none; }
-.job-card-title a:hover { color: #6C63FF; }
-.job-meta { font-size: 0.73rem; color: #9CA3AF; margin: 0.35rem 0; }
-.job-excerpt { font-size: 0.8rem; color: #6B7280; margin: 0.4rem 0; line-height: 1.5; }
-
-.badge {
-    display: inline-block; border-radius: 20px;
-    padding: 2px 9px; font-size: 0.69rem; font-weight: 600;
-    margin-right: 4px; margin-bottom: 3px;
+.topbar-left { display: flex; align-items: center; gap: 0.75rem; }
+.topbar-logo {
+    width: 32px; height: 32px;
+    background: #1E3A5F;
+    border-radius: 8px;
+    display: flex; align-items: center; justify-content: center;
 }
-.b-domain    { background:#EEF2FF; color:#6C63FF; }
-.b-remote    { background:#ECFDF5; color:#059669; }
-.b-hybrid    { background:#FFF7ED; color:#D97706; }
-.b-onsite    { background:#FEF2F2; color:#DC2626; }
-.b-junior    { background:#F0FDF4; color:#16A34A; }
-.b-mid       { background:#EFF6FF; color:#2563EB; }
-.b-senior    { background:#FDF4FF; color:#9333EA; }
-.b-lead      { background:#FEF3C7; color:#92400E; }
-.b-fulltime  { background:#EDE9FE; color:#7C3AED; }
-.b-contract  { background:#FFF7ED; color:#C2410C; }
-.b-freelance { background:#FFF1F2; color:#BE185D; }
-.b-internship{ background:#ECFDF5; color:#047857; }
-.b-parttime  { background:#F3F4F6; color:#374151; }
+.topbar-title { font-size: 0.95rem; font-weight: 700; color: #0F172A; letter-spacing: -0.01em; }
+.topbar-sub { font-size: 0.72rem; color: #94A3B8; margin-top: 1px; }
+.topbar-right { font-size: 0.72rem; color: #94A3B8; }
 
-.tech-tag {
-    display: inline-block;
-    background: #F1F5F9; color: #475569;
-    border-radius: 5px; padding: 1px 7px;
-    font-size: 0.67rem; font-family: monospace;
-    margin: 2px;
+/* ── Content wrapper ── */
+.content-wrap { padding: 1.5rem 2rem 2rem; }
+
+/* ── KPI strip ── */
+.kpi-strip {
+    display: grid;
+    grid-template-columns: repeat(5, 1fr);
+    gap: 0.875rem;
+    margin-bottom: 1.5rem;
+}
+.kpi {
+    background: #fff;
+    border: 1px solid #E2E8F0;
+    border-radius: 10px;
+    padding: 1rem 1.25rem;
+    display: flex;
+    align-items: center;
+    gap: 0.875rem;
+}
+.kpi-icon {
+    width: 38px; height: 38px;
+    border-radius: 8px;
+    display: flex; align-items: center; justify-content: center;
+    flex-shrink: 0;
+}
+.kpi-icon.blue   { background: #EFF6FF; }
+.kpi-icon.green  { background: #ECFDF5; }
+.kpi-icon.amber  { background: #FFFBEB; }
+.kpi-icon.violet { background: #F5F3FF; }
+.kpi-icon.slate  { background: #F1F5F9; }
+.kpi-num { font-size: 1.45rem; font-weight: 700; color: #0F172A; line-height: 1; }
+.kpi-lbl { font-size: 0.7rem; color: #94A3B8; font-weight: 500; margin-top: 3px; }
+
+/* ── Tabs ── */
+[data-baseweb="tab-list"] {
+    background: transparent !important;
+    border-bottom: 1px solid #E2E8F0 !important;
+    gap: 0 !important;
+    padding: 0 !important;
+}
+[data-baseweb="tab"] {
+    background: transparent !important;
+    border: none !important;
+    border-bottom: 2px solid transparent !important;
+    border-radius: 0 !important;
+    padding: 0.65rem 1.25rem !important;
+    font-size: 0.82rem !important;
+    font-weight: 500 !important;
+    color: #64748B !important;
+    margin-bottom: -1px !important;
+}
+[aria-selected="true"][data-baseweb="tab"] {
+    border-bottom-color: #2563EB !important;
+    color: #2563EB !important;
+    font-weight: 600 !important;
+}
+[data-baseweb="tab-panel"] { padding: 1.25rem 0 0 !important; }
+
+/* ── Job card ── */
+.jcard {
+    background: #fff;
+    border: 1px solid #E2E8F0;
+    border-radius: 10px;
+    padding: 1.1rem 1.4rem;
+    margin-bottom: 0.6rem;
+    transition: border-color 0.12s, box-shadow 0.12s;
+}
+.jcard:hover {
+    border-color: #93C5FD;
+    box-shadow: 0 2px 16px rgba(37,99,235,0.07);
+}
+.jcard-row1 { display: flex; justify-content: space-between; align-items: flex-start; gap: 0.75rem; margin-bottom: 0.45rem; }
+.jcard-title { font-size: 0.92rem; font-weight: 600; color: #0F172A; text-decoration: none; line-height: 1.35; }
+.jcard-title:hover { color: #2563EB; }
+.jcard-ext { flex-shrink: 0; opacity: 0.35; margin-top: 2px; }
+.jcard-badges { display: flex; flex-wrap: wrap; gap: 0.25rem; margin-bottom: 0.55rem; }
+
+/* Badges */
+.b {
+    display: inline-flex; align-items: center;
+    padding: 2px 8px; border-radius: 4px;
+    font-size: 0.67rem; font-weight: 600; letter-spacing: 0.01em;
+    white-space: nowrap;
+}
+.b-domain   { background: #EFF6FF; color: #1D4ED8; }
+.b-remote   { background: #ECFDF5; color: #065F46; }
+.b-hybrid   { background: #FFFBEB; color: #92400E; }
+.b-onsite   { background: #FEF2F2; color: #991B1B; }
+.b-junior   { background: #F0FDF4; color: #166534; }
+.b-mid      { background: #F0F9FF; color: #075985; }
+.b-senior   { background: #F5F3FF; color: #5B21B6; }
+.b-lead     { background: #FFF7ED; color: #9A3412; }
+.b-type     { background: #F8FAFC; color: #475569; border: 1px solid #E2E8F0; }
+
+/* Meta row */
+.jcard-meta {
+    display: flex; align-items: center;
+    flex-wrap: wrap; gap: 0.9rem;
+    font-size: 0.7rem; color: #94A3B8;
+    margin-bottom: 0.55rem;
+}
+.jcard-meta-item { display: inline-flex; align-items: center; gap: 0.25rem; }
+.jcard-meta-item svg { flex-shrink: 0; }
+
+/* Excerpt */
+.jcard-excerpt { font-size: 0.78rem; color: #64748B; line-height: 1.6; margin-bottom: 0.55rem; }
+
+/* Tech pills */
+.jcard-techs { display: flex; flex-wrap: wrap; gap: 0.25rem; }
+.tpill {
+    background: #F8FAFC; color: #475569;
+    border: 1px solid #E2E8F0;
+    padding: 1px 7px; border-radius: 4px;
+    font-size: 0.65rem;
+    font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
 }
 
-.section-title {
-    font-size: 1.15rem; font-weight: 700;
-    color: #1E1B4B; margin-bottom: 0.8rem;
-    padding-bottom: 0.4rem;
-    border-bottom: 2px solid #E0E7FF;
+/* ── Section heading ── */
+.sec-head {
+    font-size: 0.68rem; font-weight: 700;
+    letter-spacing: 0.07em; text-transform: uppercase;
+    color: #64748B; margin-bottom: 0.875rem;
+    padding-bottom: 0.5rem; border-bottom: 1px solid #F1F5F9;
 }
 
-[data-testid="stSidebar"] { background: #FFFFFF; border-right: 1px solid #E5E7EB; }
-[data-baseweb="tab-list"] { gap: 6px; }
-[data-baseweb="tab"] { border-radius: 8px 8px 0 0 !important; font-weight: 600 !important; }
+/* ── Pagination ── */
+.pg-bar {
+    display: flex; align-items: center;
+    justify-content: space-between;
+    padding: 0.875rem 0 0;
+    border-top: 1px solid #F1F5F9;
+    margin-top: 0.25rem;
+}
+.pg-info { font-size: 0.72rem; color: #94A3B8; }
+
+/* ── Sidebar ── */
+[data-testid="stSidebar"] {
+    background: #fff !important;
+    border-right: 1px solid #E2E8F0;
+}
+[data-testid="stSidebar"] > div:first-child { padding: 0 !important; }
+.sb-header {
+    padding: 1.25rem 1.1rem 1rem;
+    border-bottom: 1px solid #F1F5F9;
+}
+.sb-brand { font-size: 0.85rem; font-weight: 700; color: #0F172A; letter-spacing: -0.01em; }
+.sb-sub   { font-size: 0.68rem; color: #94A3B8; margin-top: 2px; }
+.sb-section {
+    padding: 0.875rem 1.1rem 0;
+}
+.sb-label {
+    font-size: 0.62rem; font-weight: 700;
+    letter-spacing: 0.08em; text-transform: uppercase;
+    color: #94A3B8; margin-bottom: 0.4rem;
+    display: flex; align-items: center; gap: 0.3rem;
+}
+.sb-divider { border: none; border-top: 1px solid #F1F5F9; margin: 0.5rem 0; }
+
+/* Date range pills */
+.date-pills { display: flex; gap: 0.35rem; flex-wrap: wrap; margin-bottom: 0.25rem; }
+.dpill {
+    padding: 4px 10px; border-radius: 5px;
+    font-size: 0.72rem; font-weight: 500;
+    cursor: pointer; border: 1px solid #E2E8F0;
+    background: #fff; color: #64748B;
+    transition: all 0.1s;
+}
+.dpill.active { background: #1E3A5F; color: #fff; border-color: #1E3A5F; }
+
+/* Streamlit widget overrides inside sidebar */
+[data-testid="stSidebar"] .stTextInput > div > div {
+    border-radius: 7px !important;
+    border-color: #E2E8F0 !important;
+    font-size: 0.82rem !important;
+}
+[data-testid="stSidebar"] .stMultiSelect [data-baseweb="select"] > div {
+    border-radius: 7px !important;
+    border-color: #E2E8F0 !important;
+    font-size: 0.8rem !important;
+}
+[data-testid="stSidebar"] [data-baseweb="tag"] {
+    background: #EFF6FF !important;
+    border: none !important;
+    border-radius: 4px !important;
+}
+[data-testid="stSidebar"] [data-baseweb="tag"] span { color: #1D4ED8 !important; font-size: 0.7rem !important; }
+
+/* Radio as date selector */
+[data-testid="stSidebar"] [data-testid="stRadio"] > div {
+    flex-direction: row !important; gap: 0.3rem !important; flex-wrap: wrap !important;
+}
+[data-testid="stSidebar"] [data-testid="stRadio"] label {
+    background: #F8FAFC; border: 1px solid #E2E8F0;
+    border-radius: 6px; padding: 4px 10px;
+    font-size: 0.72rem !important; color: #475569;
+    cursor: pointer; transition: all 0.1s;
+}
+[data-testid="stSidebar"] [data-testid="stRadio"] label:has(input:checked) {
+    background: #1E3A5F !important; color: #fff !important; border-color: #1E3A5F !important;
+}
+[data-testid="stSidebar"] [data-testid="stRadio"] input { display: none !important; }
+
+/* Expander clean-up */
+[data-testid="stSidebar"] [data-testid="stExpander"] {
+    border: 1px solid #F1F5F9 !important;
+    border-radius: 7px !important;
+    background: #FAFAFA;
+}
+[data-testid="stSidebar"] [data-testid="stExpander"] summary {
+    font-size: 0.75rem !important; font-weight: 600 !important; color: #64748B !important;
+}
+
+/* Streamlit button */
+[data-testid="stSidebar"] .stButton button {
+    width: 100%; border-radius: 7px;
+    background: #F1F5F9; border: 1px solid #E2E8F0;
+    color: #475569; font-size: 0.78rem;
+    font-weight: 500; padding: 0.45rem 0.75rem;
+    display: flex; align-items: center; justify-content: center; gap: 0.3rem;
+}
+[data-testid="stSidebar"] .stButton button:hover {
+    background: #E2E8F0; color: #1E293B;
+}
+
+/* Chart container */
+.chart-wrap {
+    background: #fff; border: 1px solid #E2E8F0;
+    border-radius: 10px; padding: 1.25rem;
+    margin-bottom: 0.875rem;
+}
 </style>
-""",
-    unsafe_allow_html=True,
-)
+""", unsafe_allow_html=True)
 
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-def _time_ago(dt: pd.Timestamp) -> str:
+# ── Helpers ────────────────────────────────────────────────────────────────
+def _ago(dt: pd.Timestamp) -> str:
     now = pd.Timestamp.now(tz="UTC")
     if dt.tzinfo is None:
         dt = dt.tz_localize("UTC")
-    diff = now - dt
-    days = diff.days
-    if days == 0:
-        hours = diff.seconds // 3600
-        return "just now" if hours == 0 else f"{hours}h ago"
-    if days == 1:
-        return "1 day ago"
-    if days < 30:
-        return f"{days} days ago"
-    if days < 365:
-        return f"{days // 30}mo ago"
-    return f"{days // 365}y ago"
+    d = (now - dt).days
+    s = (now - dt).seconds
+    if d == 0:
+        h = s // 3600
+        return "just now" if h == 0 else f"{h}h ago"
+    if d == 1:
+        return "1d ago"
+    if d < 30:
+        return f"{d}d ago"
+    if d < 365:
+        return f"{d // 30}mo ago"
+    return f"{d // 365}y ago"
 
 
-def _badge(text: str, css_class: str) -> str:
-    return f'<span class="badge {css_class}">{text}</span>'
+def _badge(text: str, cls: str) -> str:
+    return f'<span class="b {cls}">{text}</span>'
 
 
-def _work_mode_badge(mode) -> str:
-    if not mode or not isinstance(mode, str):
+def _mode_badge(v) -> str:
+    if not isinstance(v, str):
         return ""
-    cls = {"Remote": "b-remote", "Hybrid": "b-hybrid", "On-site": "b-onsite"}.get(mode, "b-domain")
-    return _badge(mode, cls)
+    return _badge(v, {"Remote": "b-remote", "Hybrid": "b-hybrid", "On-site": "b-onsite"}.get(v, "b-domain"))
 
 
-def _seniority_badge(level) -> str:
-    if not level or not isinstance(level, str):
+def _sen_badge(v) -> str:
+    if not isinstance(v, str):
         return ""
-    cls = {"Junior": "b-junior", "Mid": "b-mid", "Senior": "b-senior", "Lead/Principal": "b-lead"}.get(level, "b-mid")
-    return _badge(level, cls)
+    return _badge(v, {"Junior": "b-junior", "Mid": "b-mid", "Senior": "b-senior", "Lead/Principal": "b-lead"}.get(v, "b-mid"))
 
 
-def _job_type_badge(jtype) -> str:
-    if not jtype or not isinstance(jtype, str):
-        return ""
-    cls = {
-        "Full-time": "b-fulltime", "Contract": "b-contract",
-        "Freelance": "b-freelance", "Internship": "b-internship", "Part-time": "b-parttime",
-    }.get(jtype, "b-fulltime")
-    return _badge(jtype, cls)
+def _type_badge(v) -> str:
+    return _badge(v, "b-type") if isinstance(v, str) else ""
 
 
-# ---------------------------------------------------------------------------
-# Data loading
-# ---------------------------------------------------------------------------
+# ── Chart defaults ─────────────────────────────────────────────────────────
+_FONT = dict(family="Inter,-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif", size=12, color="#374151")
+_MARGIN = dict(l=4, r=4, t=28, b=4)
+_COLORS = ["#1E3A5F", "#2563EB", "#0EA5E9", "#06B6D4", "#10B981", "#8B5CF6", "#F59E0B", "#EF4444"]
+
+def _base_layout(**kw):
+    return dict(
+        plot_bgcolor="white", paper_bgcolor="white",
+        font=_FONT, margin=_MARGIN,
+        xaxis=dict(showgrid=True, gridcolor="#F1F5F9", linecolor="#E2E8F0", tickcolor="transparent"),
+        yaxis=dict(showgrid=True, gridcolor="#F1F5F9", linecolor="#E2E8F0", tickcolor="transparent"),
+        showlegend=False,
+        **kw,
+    )
+
+
+# ── Data ───────────────────────────────────────────────────────────────────
 @st.cache_data(ttl=300)
 def load_data() -> tuple[pd.DataFrame, pd.DataFrame]:
     init_db()
@@ -171,375 +382,396 @@ def load_data() -> tuple[pd.DataFrame, pd.DataFrame]:
         conn = get_connection()
     except (ConnectionError, ImportError, OSError) as exc:
         raise ConnectionError(str(exc)) from exc
-
     try:
-        jobs_df = pd.read_sql_query(
-            """SELECT p.post_id, p.title, p.body, p.author, p.subreddit,
+        jobs = pd.read_sql_query(
+            """SELECT p.post_id, p.title, p.body, p.subreddit,
                       p.score, p.num_comments, p.created_utc, p.post_url,
                       jc.is_job, jc.job_type, jc.seniority, jc.domain,
-                      jc.work_mode, jc.urgency_score, jc.confidence,
-                      jc.llm_classified
+                      jc.work_mode, jc.urgency_score, jc.confidence, jc.llm_classified
                FROM posts p
                LEFT JOIN job_classifications jc ON p.post_id = jc.post_id""",
             conn,
         )
-        tech_df = pd.read_sql_query("SELECT post_id, technology FROM tech_stack", conn)
+        tech = pd.read_sql_query("SELECT post_id, technology FROM tech_stack", conn)
     finally:
         conn.close()
 
-    if not jobs_df.empty and "created_utc" in jobs_df.columns:
-        jobs_df["created_utc"] = pd.to_datetime(jobs_df["created_utc"], utc=True)
-        jobs_df["date"] = jobs_df["created_utc"].dt.date
-        jobs_df["week"] = jobs_df["created_utc"].dt.to_period("W").astype(str)
+    if not jobs.empty:
+        jobs["created_utc"] = pd.to_datetime(jobs["created_utc"], utc=True)
+        jobs["date"] = jobs["created_utc"].dt.date
+        jobs["week"] = jobs["created_utc"].dt.to_period("W").astype(str)
 
-    return jobs_df, tech_df
+    return jobs, tech
 
 
-# ---------------------------------------------------------------------------
-# Sidebar
-# ---------------------------------------------------------------------------
-def render_sidebar(jobs_df: pd.DataFrame, tech_df: pd.DataFrame) -> pd.DataFrame:
+# ── Sidebar ────────────────────────────────────────────────────────────────
+def render_sidebar(jobs: pd.DataFrame, tech: pd.DataFrame) -> pd.DataFrame:
     with st.sidebar:
-        st.markdown("## 💼 Job Intelligence")
-        st.markdown("---")
+        # Header
+        st.markdown(
+            f"""<div class="sb-header">
+                <div style="display:flex;align-items:center;gap:0.5rem;margin-bottom:0.3rem">
+                    <div class="topbar-logo">{ic("briefcase", 16, "#fff")}</div>
+                    <div>
+                        <div class="sb-brand">Job Intelligence</div>
+                        <div class="sb-sub">Reddit · GPT-4o-mini</div>
+                    </div>
+                </div>
+            </div>""",
+            unsafe_allow_html=True,
+        )
 
-        st.markdown("### Date Range")
-        date_opt = st.radio("", ["Today", "Last 7 days", "Last 30 days", "All time"],
-                            index=2, label_visibility="collapsed")
-        now_utc = pd.Timestamp.now(tz="UTC")
-        cutoff = {
-            "Today": now_utc - timedelta(days=1),
-            "Last 7 days": now_utc - timedelta(days=7),
-            "Last 30 days": now_utc - timedelta(days=30),
-            "All time": pd.Timestamp("2000-01-01", tz="UTC"),
-        }[date_opt]
+        # Date range
+        st.markdown(
+            f'<div class="sb-section"><div class="sb-label">{ic("calendar", 11, "#94A3B8")} Time Range</div></div>',
+            unsafe_allow_html=True,
+        )
+        with st.container():
+            date_opt = st.radio(
+                "", ["Today", "7 days", "30 days", "All time"],
+                index=2, label_visibility="collapsed",
+            )
 
-        st.markdown("---")
-        st.markdown("### Search")
-        keyword = st.text_input("", placeholder="e.g. Python, Senior, Remote...", label_visibility="collapsed")
+        # Search
+        st.markdown(
+            f'<div class="sb-section" style="padding-top:0.75rem"><div class="sb-label">{ic("search", 11, "#94A3B8")} Search</div></div>',
+            unsafe_allow_html=True,
+        )
+        keyword = st.text_input("", placeholder="Title, skill, company...", label_visibility="collapsed")
 
-        st.markdown("---")
-        st.markdown("### Filters")
+        st.markdown('<hr class="sb-divider">', unsafe_allow_html=True)
 
-        all_domains = sorted(jobs_df["domain"].dropna().unique())
-        sel_domains = st.multiselect("Domain", all_domains, default=all_domains)
+        # Filters
+        st.markdown(
+            f'<div class="sb-section"><div class="sb-label">{ic("sliders", 11, "#94A3B8")} Filters</div></div>',
+            unsafe_allow_html=True,
+        )
 
-        all_types = sorted(jobs_df["job_type"].dropna().unique())
-        sel_types = st.multiselect("Job Type", all_types, default=all_types)
+        domains    = sorted(jobs["domain"].dropna().unique())
+        sel_domain = st.multiselect("Domain", domains, default=domains, label_visibility="collapsed",
+                                    placeholder="All domains")
 
-        all_seniority = sorted(jobs_df["seniority"].dropna().unique())
-        sel_seniority = st.multiselect("Seniority", all_seniority, default=all_seniority)
+        types      = sorted(jobs["job_type"].dropna().unique())
+        sel_type   = st.multiselect("Job Type", types, default=types, label_visibility="collapsed",
+                                    placeholder="All types")
 
-        all_modes = sorted(jobs_df["work_mode"].dropna().unique())
-        sel_modes = st.multiselect("Work Mode", all_modes, default=all_modes)
+        levels     = sorted(jobs["seniority"].dropna().unique())
+        sel_level  = st.multiselect("Seniority", levels, default=levels, label_visibility="collapsed",
+                                    placeholder="All levels")
 
-        all_techs = sorted(tech_df["technology"].unique()) if not tech_df.empty else []
-        sel_techs = st.multiselect("Tech Stack", all_techs)
+        modes      = sorted(jobs["work_mode"].dropna().unique())
+        sel_mode   = st.multiselect("Work Mode", modes, default=modes, label_visibility="collapsed",
+                                    placeholder="All modes")
 
-        with st.expander("Subreddit", expanded=False):
-            all_subs = sorted(jobs_df["subreddit"].dropna().unique())
-            sel_subs = st.multiselect("", all_subs, default=all_subs, label_visibility="collapsed")
+        all_techs  = sorted(tech["technology"].unique()) if not tech.empty else []
+        sel_tech   = st.multiselect("Tech Stack", all_techs, label_visibility="collapsed",
+                                    placeholder="Any technology")
 
-        st.markdown("---")
-        if st.button("Refresh data"):
+        with st.expander("Subreddit"):
+            subs     = sorted(jobs["subreddit"].dropna().unique())
+            sel_subs = st.multiselect("", subs, default=subs, label_visibility="collapsed")
+
+        st.markdown('<hr class="sb-divider">', unsafe_allow_html=True)
+
+        if st.button(f"Refresh data"):
             st.cache_data.clear()
             st.rerun()
 
     # Apply filters
-    f = jobs_df[jobs_df["is_job"] == True].copy() if "is_job" in jobs_df.columns else jobs_df.copy()  # noqa: E712
+    now = pd.Timestamp.now(tz="UTC")
+    cutoff = {"Today": now - timedelta(days=1), "7 days": now - timedelta(days=7),
+              "30 days": now - timedelta(days=30), "All time": pd.Timestamp("2000-01-01", tz="UTC")}[date_opt]
 
-    if "created_utc" in f.columns:
-        f = f[f["created_utc"] >= cutoff]
+    f = jobs[jobs["is_job"] == True].copy() if "is_job" in jobs.columns else jobs.copy()  # noqa: E712
+    f = f[f["created_utc"] >= cutoff]
 
     if keyword.strip():
         kw = keyword.strip().lower()
-        mask = (
-            f["title"].str.lower().str.contains(kw, na=False)
-            | f["body"].str.lower().str.contains(kw, na=False)
-        )
-        f = f[mask]
+        f = f[f["title"].str.lower().str.contains(kw, na=False) | f["body"].str.lower().str.contains(kw, na=False)]
 
-    if sel_domains:
-        f = f[f["domain"].isin(sel_domains) | f["domain"].isna()]
-    if sel_types:
-        f = f[f["job_type"].isin(sel_types) | f["job_type"].isna()]
-    if sel_seniority:
-        f = f[f["seniority"].isin(sel_seniority) | f["seniority"].isna()]
-    if sel_modes:
-        f = f[f["work_mode"].isin(sel_modes) | f["work_mode"].isna()]
-    if sel_techs:
-        matching = tech_df[tech_df["technology"].isin(sel_techs)]["post_id"].unique()
-        f = f[f["post_id"].isin(matching)]
-    if sel_subs:
-        f = f[f["subreddit"].isin(sel_subs)]
+    if sel_domain: f = f[f["domain"].isin(sel_domain) | f["domain"].isna()]
+    if sel_type:   f = f[f["job_type"].isin(sel_type) | f["job_type"].isna()]
+    if sel_level:  f = f[f["seniority"].isin(sel_level) | f["seniority"].isna()]
+    if sel_mode:   f = f[f["work_mode"].isin(sel_mode) | f["work_mode"].isna()]
+    if sel_tech:
+        ids = tech[tech["technology"].isin(sel_tech)]["post_id"].unique()
+        f = f[f["post_id"].isin(ids)]
+    if sel_subs:   f = f[f["subreddit"].isin(sel_subs)]
 
     return f
 
 
-# ---------------------------------------------------------------------------
-# KPI row
-# ---------------------------------------------------------------------------
-def render_kpis(filtered: pd.DataFrame, tech_df: pd.DataFrame) -> None:
-    yesterday = pd.Timestamp.now(tz="UTC") - timedelta(days=1)
-    new_24h = int((filtered["created_utc"] >= yesterday).sum()) if not filtered.empty else 0
-
+# ── KPI strip ──────────────────────────────────────────────────────────────
+def render_kpis(f: pd.DataFrame, tech: pd.DataFrame) -> None:
+    now = pd.Timestamp.now(tz="UTC")
+    n24 = int((f["created_utc"] >= now - timedelta(days=1)).sum()) if not f.empty else 0
     remote_pct = 0
-    if not filtered.empty and "work_mode" in filtered.columns:
-        remote_pct = int(100 * (filtered["work_mode"] == "Remote").sum() / max(len(filtered), 1))
-
-    top_domain = "N/A"
-    if not filtered.empty and "domain" in filtered.columns:
-        vc = filtered["domain"].dropna().value_counts()
+    if not f.empty and "work_mode" in f.columns:
+        remote_pct = int(100 * (f["work_mode"] == "Remote").sum() / max(len(f), 1))
+    top_domain = "—"
+    if not f.empty:
+        vc = f["domain"].dropna().value_counts()
         if not vc.empty:
-            top_domain = vc.index[0]
-
-    tech_count = 0
-    if not tech_df.empty and not filtered.empty:
-        tech_count = tech_df[tech_df["post_id"].isin(filtered["post_id"])]["technology"].nunique()
+            top_domain = vc.index[0].split(" ")[0]   # first word only so it fits
+    tech_n = tech[tech["post_id"].isin(f["post_id"])]["technology"].nunique() if not tech.empty and not f.empty else 0
 
     st.markdown(
-        f"""
-        <div class="kpi-row">
-            <div class="kpi-card">
-                <div class="kpi-value">{len(filtered):,}</div>
-                <div class="kpi-label">💼 Job Posts</div>
+        f"""<div class="kpi-strip">
+            <div class="kpi">
+                <div class="kpi-icon blue">{ic("briefcase", 18, "#2563EB")}</div>
+                <div><div class="kpi-num">{len(f):,}</div><div class="kpi-lbl">Job Posts</div></div>
             </div>
-            <div class="kpi-card green">
-                <div class="kpi-value">{new_24h}</div>
-                <div class="kpi-label">New Last 24h</div>
+            <div class="kpi">
+                <div class="kpi-icon green">{ic("zap", 18, "#059669")}</div>
+                <div><div class="kpi-num">{n24}</div><div class="kpi-lbl">New last 24 h</div></div>
             </div>
-            <div class="kpi-card orange">
-                <div class="kpi-value">{remote_pct}%</div>
-                <div class="kpi-label">Remote</div>
+            <div class="kpi">
+                <div class="kpi-icon amber">{ic("globe", 18, "#D97706")}</div>
+                <div><div class="kpi-num">{remote_pct}%</div><div class="kpi-lbl">Remote</div></div>
             </div>
-            <div class="kpi-card pink">
-                <div class="kpi-value">{top_domain}</div>
-                <div class="kpi-label">Top Domain</div>
+            <div class="kpi">
+                <div class="kpi-icon violet">{ic("layers", 18, "#7C3AED")}</div>
+                <div><div class="kpi-num">{top_domain}</div><div class="kpi-lbl">Top Domain</div></div>
             </div>
-            <div class="kpi-card teal">
-                <div class="kpi-value">{tech_count}</div>
-                <div class="kpi-label">Tech Skills</div>
+            <div class="kpi">
+                <div class="kpi-icon slate">{ic("cpu", 18, "#475569")}</div>
+                <div><div class="kpi-num">{tech_n}</div><div class="kpi-lbl">Tech Skills</div></div>
             </div>
-        </div>
-        """,
+        </div>""",
         unsafe_allow_html=True,
     )
 
 
-# ---------------------------------------------------------------------------
-# Tab 1 -- Browse Jobs
-# ---------------------------------------------------------------------------
-def render_browse(filtered: pd.DataFrame, tech_df: pd.DataFrame) -> None:
-    if filtered.empty:
+# ── Browse Jobs ────────────────────────────────────────────────────────────
+def render_browse(f: pd.DataFrame, tech: pd.DataFrame) -> None:
+    if f.empty:
         st.info("No job posts match the current filters.")
         return
 
-    sorted_df = filtered.sort_values("created_utc", ascending=False)
-    PAGE_SIZE = 20
-    total = len(sorted_df)
-    total_pages = max(1, (total + PAGE_SIZE - 1) // PAGE_SIZE)
+    df = f.sort_values("created_utc", ascending=False)
+    PAGE = 20
+    total = len(df)
+    pages = max(1, (total + PAGE - 1) // PAGE)
 
-    col_info, col_page = st.columns([3, 1])
-    with col_info:
-        st.caption(f"{total:,} job posts found")
-    with col_page:
-        page = st.number_input("Page", min_value=1, max_value=total_pages, value=1,
-                               step=1, label_visibility="collapsed")
+    col_a, col_b = st.columns([4, 1])
+    with col_a:
+        st.markdown(f'<div class="pg-info">{total:,} listings found</div>', unsafe_allow_html=True)
+    with col_b:
+        page = int(st.number_input("", min_value=1, max_value=pages, value=1,
+                                   step=1, label_visibility="collapsed"))
 
-    page_df = sorted_df.iloc[(page - 1) * PAGE_SIZE: page * PAGE_SIZE]
+    slice_df = df.iloc[(page - 1) * PAGE: page * PAGE]
 
-    for _, row in page_df.iterrows():
-        post_techs = tech_df[tech_df["post_id"] == row["post_id"]]["technology"].tolist() if not tech_df.empty else []
-
+    for _, r in slice_df.iterrows():
+        techs = tech[tech["post_id"] == r["post_id"]]["technology"].tolist() if not tech.empty else []
         badges = (
-            (_badge(row["domain"], "b-domain") if pd.notna(row.get("domain")) else "")
-            + _work_mode_badge(row.get("work_mode"))
-            + _seniority_badge(row.get("seniority"))
-            + _job_type_badge(row.get("job_type"))
+            (_badge(r["domain"], "b-domain") if pd.notna(r.get("domain")) else "")
+            + _mode_badge(r.get("work_mode"))
+            + _sen_badge(r.get("seniority"))
+            + _type_badge(r.get("job_type"))
         )
-
-        tech_tags = "".join(f'<span class="tech-tag">{t}</span>' for t in post_techs[:10])
-
+        tech_html = "".join(f'<span class="tpill">{t}</span>' for t in techs[:12])
+        body = (r.get("body") or "")
         excerpt = ""
-        body = row.get("body") or ""
         if isinstance(body, str) and body.strip():
-            excerpt = body.strip()[:220].replace("<", "&lt;").replace(">", "&gt;")
-            if len(body) > 220:
-                excerpt += "..."
+            raw = body.strip().replace("<", "&lt;").replace(">", "&gt;")
+            excerpt = raw[:230] + ("…" if len(raw) > 230 else "")
 
-        posted = _time_ago(row["created_utc"]) if pd.notna(row.get("created_utc")) else ""
+        posted = _ago(r["created_utc"]) if pd.notna(r.get("created_utc")) else ""
 
         st.markdown(
-            f"""
-            <div class="job-card">
-                <div class="job-card-title">
-                    <a href="{row['post_url']}" target="_blank">&#8599; {row['title'][:120]}</a>
+            f"""<div class="jcard">
+                <div class="jcard-row1">
+                    <a class="jcard-title" href="{r['post_url']}" target="_blank">{r['title'][:130]}</a>
+                    <span class="jcard-ext">{ic("arrow-up-right", 14, "#64748B")}</span>
                 </div>
-                <div>{badges}</div>
-                <div class="job-meta">
-                    r/{row['subreddit']} &nbsp;·&nbsp;
-                    {int(row.get('score', 0))} upvotes &nbsp;·&nbsp;
-                    {int(row.get('num_comments', 0))} comments &nbsp;·&nbsp;
-                    {posted}
+                <div class="jcard-badges">{badges}</div>
+                <div class="jcard-meta">
+                    <span class="jcard-meta-item">{ic("users", 12, "#CBD5E1")} r/{r['subreddit']}</span>
+                    <span class="jcard-meta-item">{ic("thumbs-up", 12, "#CBD5E1")} {int(r.get('score', 0))}</span>
+                    <span class="jcard-meta-item">{ic("message", 12, "#CBD5E1")} {int(r.get('num_comments', 0))}</span>
+                    <span class="jcard-meta-item">{ic("clock", 12, "#CBD5E1")} {posted}</span>
                 </div>
-                {"<div class='job-excerpt'>" + excerpt + "</div>" if excerpt else ""}
-                <div style="margin-top:0.4rem">{tech_tags}</div>
-            </div>
-            """,
+                {"<div class='jcard-excerpt'>" + excerpt + "</div>" if excerpt else ""}
+                {"<div class='jcard-techs'>" + tech_html + "</div>" if tech_html else ""}
+            </div>""",
             unsafe_allow_html=True,
         )
 
-    st.caption(f"Page {page} of {total_pages}")
+    st.markdown(
+        f'<div class="pg-info" style="padding-top:0.75rem">Page {page} of {pages}</div>',
+        unsafe_allow_html=True,
+    )
 
 
-# ---------------------------------------------------------------------------
-# Tab 2 -- Analytics
-# ---------------------------------------------------------------------------
-_LAYOUT = dict(height=320, margin=dict(l=0, r=0, t=20, b=0),
-               plot_bgcolor="white", paper_bgcolor="white",
-               font=dict(family="sans-serif", size=12))
-_PRIMARY = "#6C63FF"
-_PALETTE = px.colors.qualitative.Set2
-
-
-def render_analytics(filtered: pd.DataFrame, tech_df: pd.DataFrame) -> None:
-    if filtered.empty:
-        st.info("No data available for the current filters.")
+# ── Analytics ──────────────────────────────────────────────────────────────
+def render_analytics(f: pd.DataFrame, tech: pd.DataFrame) -> None:
+    if f.empty:
+        st.info("No data for the current filters.")
         return
 
-    c1, c2 = st.columns(2)
-    with c1:
-        st.markdown('<div class="section-title">Job Volume Over Time</div>', unsafe_allow_html=True)
-        if "date" in filtered.columns:
-            vol = filtered.groupby("date").size().reset_index(name="count")
-            fig = px.area(vol, x="date", y="count", color_discrete_sequence=[_PRIMARY])
-            fig.update_layout(**_LAYOUT, xaxis_title="", yaxis_title="Posts")
-            fig.update_traces(line_width=2, fillcolor="rgba(108,99,255,0.12)")
-            st.plotly_chart(fig, use_container_width=True)
+    def chart_wrap(fig, height=300):
+        fig.update_layout(height=height)
+        st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
 
-    with c2:
-        st.markdown('<div class="section-title">Top Subreddits</div>', unsafe_allow_html=True)
-        top_subs = filtered["subreddit"].value_counts().head(12).reset_index()
-        top_subs.columns = ["Subreddit", "Posts"]
-        fig = px.bar(top_subs, x="Posts", y="Subreddit", orientation="h",
-                     color="Posts", color_continuous_scale="Purples")
-        fig.update_layout(**_LAYOUT, yaxis=dict(autorange="reversed"),
-                          showlegend=False, coloraxis_showscale=False)
-        st.plotly_chart(fig, use_container_width=True)
+    r1a, r1b = st.columns(2)
 
-    c3, c4 = st.columns(2)
-    with c3:
-        st.markdown('<div class="section-title">Jobs by Domain</div>', unsafe_allow_html=True)
-        domain_vc = filtered["domain"].dropna().value_counts().reset_index()
-        domain_vc.columns = ["Domain", "Count"]
-        if not domain_vc.empty:
-            fig = px.pie(domain_vc, values="Count", names="Domain",
-                         hole=0.45, color_discrete_sequence=_PALETTE)
-            fig.update_layout(**_LAYOUT)
-            fig.update_traces(textposition="inside", textinfo="percent+label")
-            st.plotly_chart(fig, use_container_width=True)
+    with r1a:
+        st.markdown('<div class="sec-head">Job Volume Over Time</div>', unsafe_allow_html=True)
+        if "date" in f.columns:
+            vol = f.groupby("date").size().reset_index(name="n")
+            fig = go.Figure(go.Scatter(
+                x=vol["date"], y=vol["n"], mode="lines",
+                line=dict(color="#2563EB", width=2.5),
+                fill="tozeroy", fillcolor="rgba(37,99,235,0.07)",
+            ))
+            fig.update_layout(**_base_layout(xaxis_title="", yaxis_title="Posts"))
+            chart_wrap(fig)
 
-    with c4:
-        st.markdown('<div class="section-title">Work Mode Split</div>', unsafe_allow_html=True)
-        mode_vc = filtered["work_mode"].dropna().value_counts().reset_index()
-        mode_vc.columns = ["Mode", "Count"]
-        if not mode_vc.empty:
-            fig = px.pie(mode_vc, values="Count", names="Mode", hole=0.45,
-                         color="Mode",
-                         color_discrete_map={"Remote": "#10B981", "Hybrid": "#F59E0B", "On-site": "#EF4444"})
-            fig.update_layout(**_LAYOUT)
-            fig.update_traces(textposition="inside", textinfo="percent+label")
-            st.plotly_chart(fig, use_container_width=True)
+    with r1b:
+        st.markdown('<div class="sec-head">Top Subreddits</div>', unsafe_allow_html=True)
+        subs = f["subreddit"].value_counts().head(10).reset_index()
+        subs.columns = ["Subreddit", "n"]
+        fig = px.bar(subs, x="n", y="Subreddit", orientation="h", color_discrete_sequence=["#2563EB"])
+        fig.update_layout(**_base_layout(xaxis_title="Posts", yaxis_title="",
+                                         yaxis=dict(autorange="reversed", gridcolor="#F1F5F9",
+                                                    linecolor="#E2E8F0", tickcolor="transparent")))
+        chart_wrap(fig)
 
-    c5, c6 = st.columns(2)
-    with c5:
-        st.markdown('<div class="section-title">Seniority Distribution</div>', unsafe_allow_html=True)
-        sen_order = ["Junior", "Mid", "Senior", "Lead/Principal"]
-        sen_vc = filtered["seniority"].dropna().value_counts().reindex(sen_order).dropna().reset_index()
-        sen_vc.columns = ["Level", "Count"]
-        if not sen_vc.empty:
-            fig = px.bar(sen_vc, x="Level", y="Count", color="Level",
-                         color_discrete_sequence=["#10B981", "#2563EB", "#9333EA", "#92400E"])
-            fig.update_layout(**_LAYOUT, showlegend=False, xaxis_title="", yaxis_title="Posts")
-            st.plotly_chart(fig, use_container_width=True)
+    r2a, r2b = st.columns(2)
 
-    with c6:
-        st.markdown('<div class="section-title">Job Type Breakdown</div>', unsafe_allow_html=True)
-        type_vc = filtered["job_type"].dropna().value_counts().reset_index()
-        type_vc.columns = ["Type", "Count"]
-        if not type_vc.empty:
-            fig = px.bar(type_vc, x="Count", y="Type", orientation="h",
-                         color="Count", color_continuous_scale="Blues")
-            fig.update_layout(**_LAYOUT, yaxis=dict(autorange="reversed"),
-                              showlegend=False, coloraxis_showscale=False)
-            st.plotly_chart(fig, use_container_width=True)
+    with r2a:
+        st.markdown('<div class="sec-head">Domain Breakdown</div>', unsafe_allow_html=True)
+        d = f["domain"].dropna().value_counts().reset_index()
+        d.columns = ["Domain", "n"]
+        if not d.empty:
+            fig = px.pie(d, values="n", names="Domain", hole=0.52,
+                         color_discrete_sequence=_COLORS)
+            fig.update_layout(
+                plot_bgcolor="white", paper_bgcolor="white", font=_FONT,
+                margin=dict(l=4, r=4, t=4, b=4), showlegend=True,
+                legend=dict(font=dict(size=11), orientation="v"),
+            )
+            fig.update_traces(textposition="none")
+            chart_wrap(fig, 300)
 
-    st.markdown('<div class="section-title">Top 20 In-Demand Skills</div>', unsafe_allow_html=True)
-    if not tech_df.empty:
-        rel_tech = tech_df[tech_df["post_id"].isin(filtered["post_id"])]
-        top_skills = rel_tech["technology"].value_counts().head(20).reset_index()
-        top_skills.columns = ["Technology", "Count"]
-        fig = px.bar(top_skills, x="Count", y="Technology", orientation="h",
-                     color="Count", color_continuous_scale="Viridis")
-        fig.update_layout(height=500, margin=dict(l=0, r=0, t=10, b=0),
-                          plot_bgcolor="white", paper_bgcolor="white",
-                          yaxis=dict(autorange="reversed"),
-                          showlegend=False, coloraxis_showscale=False)
-        st.plotly_chart(fig, use_container_width=True)
+    with r2b:
+        st.markdown('<div class="sec-head">Work Mode Split</div>', unsafe_allow_html=True)
+        m = f["work_mode"].dropna().value_counts().reset_index()
+        m.columns = ["Mode", "n"]
+        if not m.empty:
+            cmap = {"Remote": "#059669", "Hybrid": "#D97706", "On-site": "#DC2626"}
+            fig = px.pie(m, values="n", names="Mode", hole=0.52,
+                         color="Mode", color_discrete_map=cmap)
+            fig.update_layout(
+                plot_bgcolor="white", paper_bgcolor="white", font=_FONT,
+                margin=dict(l=4, r=4, t=4, b=4), showlegend=True,
+                legend=dict(font=dict(size=11)),
+            )
+            fig.update_traces(textposition="none")
+            chart_wrap(fig, 300)
+
+    r3a, r3b = st.columns(2)
+
+    with r3a:
+        st.markdown('<div class="sec-head">Seniority Breakdown</div>', unsafe_allow_html=True)
+        order = ["Junior", "Mid", "Senior", "Lead/Principal"]
+        s = f["seniority"].dropna().value_counts().reindex(order).dropna().reset_index()
+        s.columns = ["Level", "n"]
+        if not s.empty:
+            fig = px.bar(s, x="Level", y="n",
+                         color="Level",
+                         color_discrete_sequence=["#059669", "#2563EB", "#7C3AED", "#D97706"])
+            fig.update_layout(**_base_layout(xaxis_title="", yaxis_title="Posts", showlegend=False))
+            chart_wrap(fig, 280)
+
+    with r3b:
+        st.markdown('<div class="sec-head">Job Type Breakdown</div>', unsafe_allow_html=True)
+        t = f["job_type"].dropna().value_counts().reset_index()
+        t.columns = ["Type", "n"]
+        if not t.empty:
+            fig = px.bar(t, x="n", y="Type", orientation="h", color_discrete_sequence=["#0EA5E9"])
+            fig.update_layout(**_base_layout(xaxis_title="Posts", yaxis_title="",
+                                             yaxis=dict(autorange="reversed", gridcolor="#F1F5F9",
+                                                        linecolor="#E2E8F0", tickcolor="transparent")))
+            chart_wrap(fig, 280)
+
+    st.markdown('<div class="sec-head" style="margin-top:1rem">Top 20 In-Demand Skills</div>', unsafe_allow_html=True)
+    if not tech.empty:
+        rt = tech[tech["post_id"].isin(f["post_id"])]
+        sk = rt["technology"].value_counts().head(20).reset_index()
+        sk.columns = ["Technology", "n"]
+        fig = px.bar(sk, x="n", y="Technology", orientation="h",
+                     color="n", color_continuous_scale=["#DBEAFE", "#1E3A5F"])
+        fig.update_layout(
+            **_base_layout(xaxis_title="Mentions", yaxis_title="",
+                           yaxis=dict(autorange="reversed", gridcolor="#F1F5F9",
+                                      linecolor="#E2E8F0", tickcolor="transparent")),
+            height=520, coloraxis_showscale=False,
+        )
+        st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
 
 
-# ---------------------------------------------------------------------------
-# Tab 3 -- Tech Trends
-# ---------------------------------------------------------------------------
-def render_tech_trends(filtered: pd.DataFrame, tech_df: pd.DataFrame) -> None:
-    if filtered.empty or tech_df.empty:
-        st.info("Not enough data to show tech trends.")
+# ── Tech Trends ────────────────────────────────────────────────────────────
+def render_tech_trends(f: pd.DataFrame, tech: pd.DataFrame) -> None:
+    if f.empty or tech.empty:
+        st.info("Not enough data.")
         return
 
-    rel_tech = tech_df[tech_df["post_id"].isin(filtered["post_id"])]
-    if rel_tech.empty:
-        st.info("No tech stack data for the current filters.")
+    rt = tech[tech["post_id"].isin(f["post_id"])]
+    if rt.empty:
+        st.info("No tech stack data for current filters.")
         return
 
-    top8 = rel_tech["technology"].value_counts().head(8).index.tolist()
-    merged = rel_tech.merge(filtered[["post_id", "week"]], on="post_id", how="left")
+    top8 = rt["technology"].value_counts().head(8).index.tolist()
+    merged = rt.merge(f[["post_id", "week"]], on="post_id", how="left")
     merged = merged[merged["technology"].isin(top8)]
-    weekly = merged.groupby(["week", "technology"]).size().reset_index(name="count")
+    weekly = merged.groupby(["week", "technology"]).size().reset_index(name="n")
 
-    st.markdown('<div class="section-title">Weekly Tech Demand (Top 8)</div>', unsafe_allow_html=True)
+    st.markdown('<div class="sec-head">Weekly Demand — Top 8 Technologies</div>', unsafe_allow_html=True)
     if not weekly.empty:
-        fig = px.line(weekly, x="week", y="count", color="technology",
-                      markers=True, color_discrete_sequence=px.colors.qualitative.Bold)
-        fig.update_layout(height=380, margin=dict(l=0, r=0, t=10, b=0),
-                          plot_bgcolor="white", paper_bgcolor="white",
-                          xaxis_title="Week", yaxis_title="Mentions", legend_title="Technology")
-        st.plotly_chart(fig, use_container_width=True)
+        fig = px.line(weekly, x="week", y="n", color="technology",
+                      markers=True, color_discrete_sequence=_COLORS)
+        fig.update_layout(
+            **_base_layout(xaxis_title="Week", yaxis_title="Mentions",
+                           showlegend=True,
+                           legend=dict(orientation="h", yanchor="bottom", y=1.02,
+                                       xanchor="left", x=0, font=dict(size=11))),
+            height=360,
+        )
+        st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
 
-    st.markdown('<div class="section-title">Tech Skills by Domain</div>', unsafe_allow_html=True)
-    domain_tech = rel_tech.merge(filtered[["post_id", "domain"]], on="post_id", how="left").dropna(subset=["domain"])
-    top20 = rel_tech["technology"].value_counts().head(20).index.tolist()
-    domain_tech = domain_tech[domain_tech["technology"].isin(top20)]
-
-    if not domain_tech.empty:
-        pivot = (domain_tech.groupby(["domain", "technology"]).size()
-                 .reset_index(name="count")
-                 .pivot(index="domain", columns="technology", values="count")
+    st.markdown('<div class="sec-head" style="margin-top:1.25rem">Tech Skills by Domain (Heatmap)</div>',
+                unsafe_allow_html=True)
+    dt = rt.merge(f[["post_id", "domain"]], on="post_id", how="left").dropna(subset=["domain"])
+    top20 = rt["technology"].value_counts().head(20).index.tolist()
+    dt = dt[dt["technology"].isin(top20)]
+    if not dt.empty:
+        pivot = (dt.groupby(["domain", "technology"]).size()
+                 .reset_index(name="n")
+                 .pivot(index="domain", columns="technology", values="n")
                  .fillna(0))
-        fig = px.imshow(pivot, color_continuous_scale="Purples", aspect="auto", text_auto=True)
-        fig.update_layout(height=420, margin=dict(l=0, r=0, t=10, b=0),
-                          coloraxis_showscale=False, xaxis_title="", yaxis_title="")
-        st.plotly_chart(fig, use_container_width=True)
+        fig = px.imshow(pivot, color_continuous_scale=["#F8FAFC", "#1E3A5F"],
+                        aspect="auto", text_auto=True)
+        fig.update_layout(
+            plot_bgcolor="white", paper_bgcolor="white", font=_FONT,
+            margin=dict(l=4, r=4, t=4, b=4),
+            coloraxis_showscale=False, xaxis_title="", yaxis_title="",
+            height=400,
+        )
+        fig.update_traces(textfont_size=10)
+        st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
 
-    st.markdown('<div class="section-title">Common Tech Combinations</div>', unsafe_allow_html=True)
-    post_techs = rel_tech.groupby("post_id")["technology"].apply(list)
+    st.markdown('<div class="sec-head" style="margin-top:1.25rem">Common Tech Combinations</div>',
+                unsafe_allow_html=True)
+    pt = rt.groupby("post_id")["technology"].apply(list)
     pairs: dict[tuple, int] = {}
-    for techs in post_techs:
-        techs_sorted = sorted(set(techs))
-        for i in range(len(techs_sorted)):
-            for j in range(i + 1, len(techs_sorted)):
-                pair = (techs_sorted[i], techs_sorted[j])
-                pairs[pair] = pairs.get(pair, 0) + 1
-
+    for ts in pt:
+        ts = sorted(set(ts))
+        for i in range(len(ts)):
+            for j in range(i + 1, len(ts)):
+                k = (ts[i], ts[j])
+                pairs[k] = pairs.get(k, 0) + 1
     if pairs:
         pair_df = (pd.DataFrame([{"Tech A": a, "Tech B": b, "Co-occurrences": c}
                                   for (a, b), c in pairs.items()])
@@ -547,50 +779,54 @@ def render_tech_trends(filtered: pd.DataFrame, tech_df: pd.DataFrame) -> None:
         st.dataframe(pair_df, hide_index=True, use_container_width=True)
 
 
-# ---------------------------------------------------------------------------
-# Main
-# ---------------------------------------------------------------------------
+# ── Main ───────────────────────────────────────────────────────────────────
 def main() -> None:
-    st.markdown(
-        """
-        <h1 style="margin-bottom:0; color:#1E1B4B;">💼 Reddit Job Intelligence</h1>
-        <p style="color:#9CA3AF; margin-top:0.2rem; font-size:0.88rem;">
-            Daily job listings aggregated and classified from Reddit communities
-        </p>
-        """,
-        unsafe_allow_html=True,
-    )
-
     try:
-        jobs_df, tech_df = load_data()
+        jobs, tech = load_data()
     except ConnectionError as exc:
         st.error(f"Database connection failed: {exc}")
         return
 
-    if jobs_df.empty:
+    if jobs.empty:
         st.info("No data yet. Run the pipeline first:\n\n```bash\npython -m src.pipeline.run\n```")
         return
 
-    filtered = render_sidebar(jobs_df, tech_df)
-    render_kpis(filtered, tech_df)
+    filtered = render_sidebar(jobs, tech)
 
-    tab1, tab2, tab3 = st.tabs(["📋  Browse Jobs", "📊  Analytics", "⚙️  Tech Trends"])
-    with tab1:
-        render_browse(filtered, tech_df)
-    with tab2:
-        render_analytics(filtered, tech_df)
-    with tab3:
-        render_tech_trends(filtered, tech_df)
-
+    # Top bar
+    total_db = int((jobs["is_job"] == True).sum()) if "is_job" in jobs.columns else len(jobs)  # noqa: E712
+    latest = jobs["created_utc"].max()
+    latest_str = _ago(latest) if pd.notna(latest) else "unknown"
     st.markdown(
-        """
-        <div style="text-align:center; color:#D1D5DB; font-size:0.75rem; margin-top:2rem;
-                    padding-top:1rem; border-top:1px solid #E5E7EB;">
-            Reddit Job Intelligence · Data from public Reddit posts · Built with Streamlit and Plotly
-        </div>
-        """,
+        f"""<div class="topbar">
+            <div class="topbar-left">
+                <div class="topbar-logo">{ic("briefcase", 16, "#fff")}</div>
+                <div>
+                    <div class="topbar-title">Job Intelligence</div>
+                    <div class="topbar-sub">Reddit job listings, classified by GPT-4o-mini</div>
+                </div>
+            </div>
+            <div class="topbar-right">
+                {total_db:,} jobs in database &nbsp;·&nbsp; last updated {latest_str}
+            </div>
+        </div>""",
         unsafe_allow_html=True,
     )
+
+    st.markdown('<div class="content-wrap">', unsafe_allow_html=True)
+
+    render_kpis(filtered, tech)
+
+    tab1, tab2, tab3 = st.tabs(["Browse Jobs", "Analytics", "Tech Trends"])
+
+    with tab1:
+        render_browse(filtered, tech)
+    with tab2:
+        render_analytics(filtered, tech)
+    with tab3:
+        render_tech_trends(filtered, tech)
+
+    st.markdown('</div>', unsafe_allow_html=True)
 
 
 if __name__ == "__main__":
