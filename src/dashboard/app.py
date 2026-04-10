@@ -308,6 +308,61 @@ html, body, [class*="css"] {
     border-radius: 10px; padding: 1.25rem;
     margin-bottom: 0.875rem;
 }
+
+/* ── Mobile responsive ── */
+@media (max-width: 768px) {
+
+    /* Reduce block-container padding and pull topbar flush */
+    .main .block-container { padding: 0 0.75rem 1.5rem !important; }
+    .topbar {
+        margin-left: -0.75rem !important;
+        margin-right: -0.75rem !important;
+        padding: 0.7rem 0.75rem !important;
+    }
+    /* Hide the "X jobs in database · last updated" text on small screens */
+    .topbar-right { display: none !important; }
+    .topbar-sub   { display: none !important; }
+
+    /* KPI strip: 2 columns instead of 5 */
+    .kpi-strip {
+        grid-template-columns: repeat(2, 1fr) !important;
+        gap: 0.5rem !important;
+    }
+    .kpi { padding: 0.75rem 0.875rem !important; }
+    .kpi-num { font-size: 1.2rem !important; }
+    .kpi-icon { width: 32px !important; height: 32px !important; }
+
+    /* Stack all st.columns() layouts vertically */
+    [data-testid="stHorizontalBlock"] {
+        flex-direction: column !important;
+        gap: 0 !important;
+    }
+    [data-testid="stColumn"] {
+        width: 100% !important;
+        flex: 1 1 100% !important;
+        min-width: 100% !important;
+    }
+
+    /* Reduce job card padding */
+    .jcard { padding: 0.875rem 0.875rem !important; }
+    .jcard-title { font-size: 0.85rem !important; }
+    .jcard-meta  { gap: 0.5rem !important; }
+
+    /* Tighten section headings */
+    .sec-head { margin-bottom: 0.5rem !important; }
+
+    /* Tabs: smaller text */
+    [data-baseweb="tab"] {
+        padding: 0.55rem 0.875rem !important;
+        font-size: 0.76rem !important;
+    }
+}
+
+@media (max-width: 480px) {
+    /* Very small screens: KPI strip single column */
+    .kpi-strip { grid-template-columns: 1fr 1fr !important; }
+    .topbar-title { font-size: 0.85rem !important; }
+}
 </style>
 """, unsafe_allow_html=True)
 
