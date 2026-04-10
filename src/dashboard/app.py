@@ -1,6 +1,7 @@
 """Reddit Job Intelligence -- Streamlit Dashboard."""
 
 import sys
+import html
 from datetime import timedelta
 from pathlib import Path
 
@@ -56,11 +57,29 @@ st.markdown("""
 html, body, [class*="css"] {
     font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
 }
-#MainMenu, footer, header { display: none !important; }
+#MainMenu, footer { display: none !important; }
 
 /* ── Layout ── */
-[data-testid="stAppViewContainer"] > .main { background: #F1F5F9; }
+.stApp,
+[data-testid="stAppViewContainer"],
+[data-testid="stAppViewContainer"] > .main,
+[data-testid="stHeader"],
+[data-testid="stToolbar"] {
+    background: #F1F5F9 !important;
+}
+[data-testid="stAppViewContainer"] > .main {
+    color: #0F172A !important;
+}
 .main .block-container { padding: 0 2rem 2rem !important; max-width: 100% !important; }
+[data-testid="collapsedControl"] {
+    background: #FFFFFF !important;
+    border: 1px solid #CBD5E1 !important;
+    border-radius: 8px !important;
+    box-shadow: 0 1px 4px rgba(15, 23, 42, 0.08) !important;
+}
+[data-testid="collapsedControl"] svg {
+    stroke: #0F172A !important;
+}
 
 /* ── Top bar ── */
 .topbar {
@@ -221,6 +240,17 @@ html, body, [class*="css"] {
     margin-top: 0.25rem;
 }
 .pg-info { font-size: 0.72rem; color: #94A3B8; }
+[data-testid="stNumberInput"] input {
+    background: #fff !important;
+    color: #0F172A !important;
+    border: 1px solid #E2E8F0 !important;
+    border-radius: 8px !important;
+}
+[data-testid="stNumberInput"] button {
+    background: #fff !important;
+    color: #475569 !important;
+    border-color: #E2E8F0 !important;
+}
 
 /* ── Sidebar ── */
 [data-testid="stSidebar"] {
@@ -426,6 +456,10 @@ def _base_layout(**kw):
     return layout
 
 
+def _clamp_page(value: int, pages: int) -> int:
+    return min(max(int(value), 1), pages)
+
+
 # ── Data ───────────────────────────────────────────────────────────────────
 @st.cache_data(ttl=300)
 def load_data() -> tuple[pd.DataFrame, pd.DataFrame]:
@@ -607,12 +641,24 @@ def render_browse(f: pd.DataFrame, tech: pd.DataFrame) -> None:
     total = len(df)
     pages = max(1, (total + PAGE - 1) // PAGE)
 
-    col_a, col_b = st.columns([4, 1])
+    current_page = _clamp_page(st.session_state.get("browse_page", 1), pages)
+
+    col_a, col_b, col_c, col_d = st.columns([4, 1.2, 0.8, 0.8])
     with col_a:
         st.markdown(f'<div class="pg-info">{total:,} listings found</div>', unsafe_allow_html=True)
     with col_b:
-        page = int(st.number_input("", min_value=1, max_value=pages, value=1,
-                                   step=1, label_visibility="collapsed"))
+        page = int(st.number_input("Page", min_value=1, max_value=pages, value=current_page,
+                                   step=1, key="browse_page_input", label_visibility="collapsed"))
+    with col_c:
+        if st.button("◀ Prev", use_container_width=True, disabled=page <= 1, key="browse_prev"):
+            st.session_state["browse_page"] = page - 1
+            st.rerun()
+    with col_d:
+        if st.button("Next ▶", use_container_width=True, disabled=page >= pages, key="browse_next"):
+            st.session_state["browse_page"] = page + 1
+            st.rerun()
+    page = _clamp_page(page, pages)
+    st.session_state["browse_page"] = page
 
     slice_df = df.iloc[(page - 1) * PAGE: page * PAGE]
 
@@ -624,7 +670,11 @@ def render_browse(f: pd.DataFrame, tech: pd.DataFrame) -> None:
             + _sen_badge(r.get("seniority"))
             + _type_badge(r.get("job_type"))
         )
-        tech_html = "".join(f'<span class="tpill">{t}</span>' for t in techs[:12])
+        tech_html = "".join(
+            f"<span class='tpill'>{html.escape(t, quote=True)}</span>"
+            for t in techs[:12]
+            if isinstance(t, str) and t.strip()
+        )
         body = (r.get("body") or "")
         excerpt = ""
         if isinstance(body, str) and body.strip():
@@ -812,15 +862,32 @@ def render_tech_trends(f: pd.DataFrame, tech: pd.DataFrame) -> None:
                  .reset_index(name="n")
                  .pivot(index="domain", columns="technology", values="n")
                  .fillna(0))
-        fig = px.imshow(pivot, color_continuous_scale=["#F8FAFC", "#1E3A5F"],
-                        aspect="auto", text_auto=True)
+        try:
+            fig = px.imshow(
+                pivot,
+                color_continuous_scale=["#F8FAFC", "#1E3A5F"],
+                aspect="auto",
+                text_auto=True,
+            )
+        except TypeError:
+            # Older Plotly versions may not support text_auto.
+            fig = px.imshow(
+                pivot,
+                color_continuous_scale=["#F8FAFC", "#1E3A5F"],
+                aspect="auto",
+            )
         fig.update_layout(
             plot_bgcolor="white", paper_bgcolor="white", font=_FONT,
             margin=dict(l=4, r=4, t=4, b=4),
-            coloraxis_showscale=False, xaxis_title="", yaxis_title="",
+            # Some deployments reject `coloraxis_showscale`; nested coloraxis works consistently there.
+            coloraxis=dict(showscale=False), xaxis_title="", yaxis_title="",
             height=400,
         )
-        fig.update_traces(textfont_size=10)
+        try:
+            fig.update_traces(textfont_size=10)
+        except (TypeError, ValueError, AttributeError):
+            # textfont_size is cosmetic; skip when unsupported by the active Plotly trace/version.
+            pass
         st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
 
     st.markdown('<div class="sec-head" style="margin-top:1.25rem">Common Tech Combinations</div>',
