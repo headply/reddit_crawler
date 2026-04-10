@@ -60,7 +60,16 @@ html, body, [class*="css"] {
 #MainMenu, footer, header { display: none !important; }
 
 /* ── Layout ── */
-[data-testid="stAppViewContainer"] > .main { background: #F1F5F9; }
+.stApp,
+[data-testid="stAppViewContainer"],
+[data-testid="stAppViewContainer"] > .main,
+[data-testid="stHeader"],
+[data-testid="stToolbar"] {
+    background: #F1F5F9 !important;
+}
+[data-testid="stAppViewContainer"] > .main {
+    color: #0F172A !important;
+}
 .main .block-container { padding: 0 2rem 2rem !important; max-width: 100% !important; }
 
 /* ── Top bar ── */
@@ -222,6 +231,17 @@ html, body, [class*="css"] {
     margin-top: 0.25rem;
 }
 .pg-info { font-size: 0.72rem; color: #94A3B8; }
+[data-testid="stNumberInput"] input {
+    background: #fff !important;
+    color: #0F172A !important;
+    border: 1px solid #E2E8F0 !important;
+    border-radius: 8px !important;
+}
+[data-testid="stNumberInput"] button {
+    background: #fff !important;
+    color: #475569 !important;
+    border-color: #E2E8F0 !important;
+}
 
 /* ── Sidebar ── */
 [data-testid="stSidebar"] {
@@ -829,11 +849,14 @@ def render_tech_trends(f: pd.DataFrame, tech: pd.DataFrame) -> None:
         fig.update_layout(
             plot_bgcolor="white", paper_bgcolor="white", font=_FONT,
             margin=dict(l=4, r=4, t=4, b=4),
+            # Use nested coloraxis for cross-version compatibility.
             coloraxis=dict(showscale=False), xaxis_title="", yaxis_title="",
             height=400,
         )
-        if fig.data and hasattr(fig.data[0], "textfont"):
+        try:
             fig.update_traces(textfont_size=10)
+        except (TypeError, ValueError, AttributeError):
+            pass
         st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
 
     st.markdown('<div class="sec-head" style="margin-top:1.25rem">Common Tech Combinations</div>',
