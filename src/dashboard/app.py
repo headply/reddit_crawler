@@ -414,7 +414,7 @@ def render_sidebar(jobs: pd.DataFrame, tech: pd.DataFrame) -> pd.DataFrame:
                     <div class="topbar-logo">{ic("briefcase", 16, "#fff")}</div>
                     <div>
                         <div class="sb-brand">Job Intelligence</div>
-                        <div class="sb-sub">Reddit · GPT-4o-mini</div>
+                        <div class="sb-sub">Automated job intelligence</div>
                     </div>
                 </div>
             </div>""",
@@ -803,7 +803,7 @@ def main() -> None:
                 <div class="topbar-logo">{ic("briefcase", 16, "#fff")}</div>
                 <div>
                     <div class="topbar-title">Job Intelligence</div>
-                    <div class="topbar-sub">Reddit job listings, classified by GPT-4o-mini</div>
+                    <div class="topbar-sub">Daily job listings from Reddit communities</div>
                 </div>
             </div>
             <div class="topbar-right">

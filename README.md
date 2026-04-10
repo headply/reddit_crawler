@@ -1,186 +1,72 @@
-# Reddit Job Intelligence Platform
+# Reddit Job Intelligence
 
-An automated pipeline that scrapes Reddit job communities daily, classifies posts using GPT-4o-mini, and surfaces clean job listings through an interactive Streamlit dashboard.
+A platform that monitors Reddit job communities around the clock, filters out the noise, and surfaces only real job opportunities through a clean, searchable dashboard.
 
----
-
-## What It Does
-
-- Scrapes 24 targeted subreddits every day via GitHub Actions
-- Passes each post through GPT-4o-mini to determine if it is a real job opportunity (not career advice, job seeking, or discussion)
-- Classifies confirmed job posts by domain, seniority, work mode, job type, and tech stack
-- Stores results in a PostgreSQL database (Supabase)
-- Serves a filterable job board and analytics dashboard on Streamlit Cloud
+Reddit is one of the most active places where companies and individuals post job openings, but the signal-to-noise ratio is terrible. Career advice threads, job seekers advertising themselves, rants, and memes all live alongside genuine hiring posts. This platform solves that by automatically scraping, classifying, and presenting only the posts that matter.
 
 ---
 
-## Tech Stack
+## What it shows you
 
-- **Scraping:** PRAW (Reddit API)
-- **Classification:** OpenAI GPT-4o-mini
-- **Database:** PostgreSQL via Supabase (SQLite for local dev)
-- **Dashboard:** Streamlit + Plotly
-- **Automation:** GitHub Actions (daily cron at 06:00 UTC)
+- Real job postings pulled from 24 active subreddits, updated daily
+- Each post classified by domain, seniority level, work mode, and job type
+- Tech stack extracted from every listing
+- A filterable job board so you can zero in on what is relevant to you
+- Analytics on hiring trends, in-demand skills, and where the activity is concentrated
+- Technology demand over time, broken down by week and domain
 
 ---
 
-## Project Structure
+## How it works
 
-```
-reddit_crawler/
-├── src/
-│   ├── scrape/
-│   │   └── reddit_scraper.py      # PRAW scraping logic
-│   ├── nlp/
-│   │   ├── llm_sieve.py           # GPT-4o-mini classifier
-│   │   └── enrichment.py          # Rule-based fallback
-│   ├── pipeline/
-│   │   └── run.py                 # Orchestrator (scrape + classify + store)
-│   ├── dashboard/
-│   │   └── app.py                 # Streamlit dashboard
-│   ├── db.py                      # Database connections and queries
-│   └── config.py                  # Subreddits, domains, keyword patterns
-├── data/
-│   ├── schema.sql                 # SQLite schema (local dev)
-│   └── schema_postgres.sql        # PostgreSQL schema (Supabase)
-├── scripts/
-│   └── clear_data.py              # Wipe all data for a fresh start
-├── .github/
-│   └── workflows/
-│       └── daily_scrape.yml       # GitHub Actions workflow
-├── .env.example
-└── requirements.txt
-```
+A scheduled job runs every day and scrapes new posts from Reddit job communities. Each post goes through an AI classifier that reads the title and body and decides whether it is a genuine job opportunity or not. Posts that pass get tagged with metadata and stored. The dashboard reads from that store in real time.
+
+The result is a clean feed of verified job listings with none of the surrounding noise.
+
+---
+
+## Dashboard
+
+The dashboard has three sections:
+
+**Browse Jobs** -- A paginated list of job cards. Each card shows the title, domain, seniority, work mode, job type, tech stack, score, and how long ago it was posted. Filter by any combination of domain, job type, seniority, work mode, technology, date range, or keyword.
+
+**Analytics** -- Charts showing job volume over time, top subreddits, domain breakdown, work mode split, seniority distribution, job type breakdown, and the top 20 most in-demand skills.
+
+**Tech Trends** -- Weekly demand for the top technologies, a heatmap of which skills appear in which domains, and the most common technology combinations seen together in listings.
+
+---
+
+## Subreddits monitored
+
+Dedicated job boards: forhire, jobbit, remotejobs, techjobs, datajobs, PythonJobs, webdevjobs, reactjobs, MLjobs, devopsjobs, cybersecurityjobs, uxjobs, gamedevjobs
+
+Active communities with regular hiring posts: webdev, dataengineering, devops, MachineLearning, androiddev, iOSProgramming, netsec, freelance, workonline, digitalnomad
+
+---
+
+## Domains tracked
+
+Software Engineering, Data & Analytics, AI and Machine Learning, DevOps and Cloud, Mobile, Design and UX, Product Management, Marketing and Growth, Security, Game Development, Blockchain and Web3, QA and Testing, Finance and FinTech
 
 ---
 
 ## Setup
 
-### 1. Clone and install
-
 ```bash
 git clone https://github.com/headply/reddit_crawler.git
 cd reddit_crawler
 pip install -r requirements.txt
-```
-
-### 2. Environment variables
-
-Copy `.env.example` to `.env` and fill in your credentials:
-
-```bash
 cp .env.example .env
+# Fill in REDDIT_CLIENT_ID, REDDIT_CLIENT_SECRET, DATABASE_URL, OPENAI_API_KEY
+python -m src.pipeline.run        # run the pipeline
+streamlit run src/dashboard/app.py # run the dashboard
 ```
 
-Required variables:
+For deployment, add the same environment variables as GitHub Actions secrets and as Streamlit secrets. The pipeline runs automatically at 06:00 UTC every day via GitHub Actions.
 
-| Variable | Description |
-|---|---|
-| `REDDIT_CLIENT_ID` | From https://www.reddit.com/prefs/apps |
-| `REDDIT_CLIENT_SECRET` | From https://www.reddit.com/prefs/apps |
-| `REDDIT_USER_AGENT` | Any string, e.g. `reddit-job-intel/1.0` |
-| `DATABASE_URL` | PostgreSQL connection string from Supabase |
-| `OPENAI_API_KEY` | From https://platform.openai.com/api-keys |
-
-### 3. Set up the database
-
-Run the schema in your Supabase SQL editor:
-
-```sql
--- Copy contents of data/schema_postgres.sql and run it in Supabase
-```
-
-### 4. Run the pipeline locally
-
-```bash
-python -m src.pipeline.run
-```
-
-### 5. Run the dashboard locally
-
-```bash
-streamlit run src/dashboard/app.py
-```
-
----
-
-## Deployment
-
-### GitHub Actions (automated daily scraping)
-
-Add these as repository secrets under Settings > Secrets and variables > Actions:
-
-- `REDDIT_CLIENT_ID`
-- `REDDIT_CLIENT_SECRET`
-- `REDDIT_USER_AGENT`
-- `DATABASE_URL`
-- `OPENAI_API_KEY`
-
-The workflow runs automatically at 06:00 UTC every day. You can also trigger it manually from the Actions tab.
-
-### Streamlit Cloud (dashboard hosting)
-
-1. Connect your GitHub repo on https://streamlit.io/cloud
-2. Set the main file path to `src/dashboard/app.py`
-3. Add `DATABASE_URL` to your Streamlit secrets
-
----
-
-## Dashboard Features
-
-**Browse Jobs tab**
-- Paginated job cards with title, domain badge, seniority, work mode, job type, and tech tags
-- Filters: date range, keyword search, domain, seniority, work mode, tech stack, subreddit
-- Sorted by most recent
-
-**Analytics tab**
-- Job volume over time (area chart)
-- Top subreddits by job count
-- Domain breakdown (donut chart)
-- Work mode split (Remote / Hybrid / On-site)
-- Seniority distribution
-- Job type breakdown
-- Top 20 in-demand skills
-
-**Tech Trends tab**
-- Weekly demand for the top 8 technologies (line chart)
-- Tech skills by domain (heatmap)
-- Most common technology combinations
-
----
-
-## Supported Subreddits
-
-| Category | Subreddits |
-|---|---|
-| Dedicated job boards | forhire, jobbit, remotejobs, techjobs, datajobs |
-| Specialised | PythonJobs, webdevjobs, reactjobs, MLjobs, devopsjobs, cybersecurityjobs, uxjobs, gamedevjobs |
-| Tech communities | webdev, dataengineering, devops, MachineLearning, androiddev, iOSProgramming, netsec |
-| Remote / Freelance | freelance, workonline, digitalnomad |
-
----
-
-## Job Domains
-
-Software Engineering, Data & Analytics, AI / Machine Learning, DevOps & Cloud, Mobile, Design & UX, Product Management, Marketing & Growth, Security, Game Development, Blockchain & Web3, QA & Testing, Finance & FinTech
-
----
-
-## Utilities
-
-### Clear all data
-
-Run this before a fresh scrape to wipe the database:
+To wipe the database and start fresh:
 
 ```bash
 python scripts/clear_data.py
 ```
-
----
-
-## Notes
-
-- The LLM classifier (GPT-4o-mini) costs roughly $0.001 per 100 posts classified.
-- If `OPENAI_API_KEY` is not set, the pipeline falls back to rule-based keyword classification automatically.
-- GitHub disables scheduled workflows on repositories with no activity for 60 days. Trigger a manual run from the Actions tab to re-enable the schedule.
-- The database schema must be re-run on Supabase if you are setting up fresh or need to add the `confidence` and `llm_classified` columns.
