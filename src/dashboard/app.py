@@ -360,8 +360,10 @@ html, body, [class*="css"] {
 
 @media (max-width: 480px) {
     /* Very small screens: KPI strip single column */
-    .kpi-strip { grid-template-columns: 1fr 1fr !important; }
+    .kpi-strip { grid-template-columns: 1fr !important; }
     .topbar-title { font-size: 0.85rem !important; }
+    .jcard-title { word-break: break-word !important; overflow-wrap: anywhere !important; }
+    .jcard-meta { row-gap: 0.35rem !important; }
 }
 </style>
 """, unsafe_allow_html=True)
@@ -450,6 +452,14 @@ def load_data() -> tuple[pd.DataFrame, pd.DataFrame]:
         jobs["created_utc"] = pd.to_datetime(jobs["created_utc"], utc=True)
         jobs["date"] = jobs["created_utc"].dt.date
         jobs["week"] = jobs["created_utc"].dt.to_period("W").astype(str)
+
+    if not tech.empty:
+        tech = tech.dropna(subset=["post_id", "technology"]).copy()
+        tech["technology"] = tech["technology"].map(
+            lambda v: v.strip() if isinstance(v, str) else ""
+        )
+        tech = tech[tech["technology"] != ""]
+        tech = tech.drop_duplicates(subset=["post_id", "technology"])
 
     return jobs, tech
 
@@ -818,7 +828,7 @@ def render_tech_trends(f: pd.DataFrame, tech: pd.DataFrame) -> None:
     pt = rt.groupby("post_id")["technology"].apply(list)
     pairs: dict[tuple, int] = {}
     for ts in pt:
-        ts = sorted(set(ts))
+        ts = sorted({t.strip() for t in ts if isinstance(t, str) and t.strip()})
         for i in range(len(ts)):
             for j in range(i + 1, len(ts)):
                 k = (ts[i], ts[j])
