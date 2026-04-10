@@ -29,6 +29,8 @@ CREATE TABLE IF NOT EXISTS job_classifications (
     work_mode       TEXT,
     sentiment_score REAL,
     urgency_score   REAL,
+    confidence      REAL,
+    llm_classified  BOOLEAN DEFAULT FALSE,
     classified_at   TIMESTAMP DEFAULT NOW(),
     FOREIGN KEY (post_id) REFERENCES posts(post_id)
 );

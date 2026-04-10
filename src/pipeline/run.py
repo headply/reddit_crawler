@@ -1,7 +1,8 @@
 """Pipeline orchestrator for the Reddit Job Intelligence Platform.
 
-Coordinates scraping, NLP enrichment, and database storage.
-Can be run as a standalone script or imported.
+Coordinates scraping, LLM classification, and database storage.
+Uses GPT-4o-mini as the primary classifier. Falls back to rule-based
+enrichment if OPENAI_API_KEY is not set.
 """
 
 import logging
@@ -9,16 +10,14 @@ import sys
 from pathlib import Path
 from typing import Any
 
-# Ensure project root is on path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
 from src.db import (
+    execute_query,
     init_db,
     insert_classification,
     insert_tech_stack,
-    execute_query,
 )
-from src.nlp.enrichment import enrich_post
 from src.scrape.reddit_scraper import scrape_all
 
 logging.basicConfig(
@@ -30,11 +29,7 @@ logger = logging.getLogger(__name__)
 
 
 def get_unprocessed_posts() -> list[dict[str, Any]]:
-    """Fetch posts that have not yet been classified.
-
-    Returns:
-        List of post dictionaries awaiting enrichment.
-    """
+    """Fetch posts that have not yet been classified."""
     rows = execute_query(
         """SELECT p.post_id, p.title, p.body, p.subreddit
            FROM posts p
@@ -46,49 +41,64 @@ def get_unprocessed_posts() -> list[dict[str, Any]]:
 
 
 def enrich_and_store(posts: list[dict[str, Any]]) -> int:
-    """Enrich posts with NLP and store results in the database.
+    """Classify posts and store results. Uses LLM sieve when available.
 
     Args:
-        posts: List of post dictionaries to enrich.
+        posts: List of unclassified post dicts.
 
     Returns:
-        Number of posts successfully enriched.
+        Number of posts successfully classified and stored.
     """
-    enriched_count = 0
-    for post in posts:
-        try:
-            result = enrich_post(post)
-            tech_stack = result.pop("tech_stack", [])
+    from src.nlp.llm_sieve import classify_posts_batch, openai_available
 
-            insert_classification(result)
+    if not posts:
+        return 0
+
+    if openai_available():
+        logger.info("OpenAI key detected — using LLM classifier.")
+        results = classify_posts_batch(posts)
+    else:
+        logger.warning(
+            "OPENAI_API_KEY not set — falling back to rule-based enrichment."
+        )
+        from src.nlp.enrichment import enrich_post
+        results = []
+        for post in posts:
+            try:
+                results.append(enrich_post(post))
+            except Exception as exc:
+                logger.error("Rule-based enrichment failed for %s: %s", post.get("post_id"), exc)
+
+    stored = 0
+    llm = openai_available()
+    for result in results:
+        try:
+            tech_stack = result.pop("tech_stack", [])
+            insert_classification({**result, "llm_classified": llm})
             if tech_stack:
                 insert_tech_stack(result["post_id"], tech_stack)
+            stored += 1
+        except Exception as exc:
+            logger.error("Failed to store classification for %s: %s", result.get("post_id"), exc)
 
-            enriched_count += 1
-        except Exception as e:
-            logger.error("Error enriching post %s: %s", post.get("post_id"), str(e))
-
-    return enriched_count
+    return stored
 
 
 def run_pipeline(skip_scrape: bool = False) -> dict[str, int]:
-    """Execute the full pipeline: scrape, enrich, store.
+    """Execute the full pipeline: scrape, classify, store.
 
     Args:
-        skip_scrape: If True, skip scraping and only enrich existing posts.
+        skip_scrape: If True, skip scraping and only classify existing posts.
 
     Returns:
-        Dictionary with counts of scraped and enriched posts.
+        Dict with counts: scraped, classified.
     """
     logger.info("=" * 60)
     logger.info("Reddit Job Intelligence Pipeline - Starting")
     logger.info("=" * 60)
 
-    # Initialize database
     init_db()
-    logger.info("Database initialized.")
 
-    # Step 1: Scrape
     scraped_count = 0
     if not skip_scrape:
         logger.info("Step 1: Scraping Reddit...")
@@ -96,22 +106,24 @@ def run_pipeline(skip_scrape: bool = False) -> dict[str, int]:
         scraped_count = len(new_posts)
         logger.info("Scraped %d new posts.", scraped_count)
     else:
-        logger.info("Step 1: Skipping scrape (--skip-scrape flag).")
+        logger.info("Step 1: Skipping scrape.")
 
-    # Step 2: Enrich unprocessed posts
-    logger.info("Step 2: Enriching posts with NLP...")
+    logger.info("Step 2: Classifying unprocessed posts...")
     unprocessed = get_unprocessed_posts()
     logger.info("Found %d unprocessed posts.", len(unprocessed))
 
-    enriched_count = enrich_and_store(unprocessed)
-    logger.info("Enriched %d posts.", enriched_count)
+    classified_count = enrich_and_store(unprocessed)
+    logger.info("Classified %d posts.", classified_count)
 
-    # Summary
     logger.info("=" * 60)
-    logger.info("Pipeline complete: %d scraped, %d enriched", scraped_count, enriched_count)
+    logger.info(
+        "Pipeline complete - scraped: %d, classified: %d",
+        scraped_count,
+        classified_count,
+    )
     logger.info("=" * 60)
 
-    return {"scraped": scraped_count, "enriched": enriched_count}
+    return {"scraped": scraped_count, "classified": classified_count}
 
 
 if __name__ == "__main__":

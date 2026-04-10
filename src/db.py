@@ -232,8 +232,9 @@ def insert_classification(classification: dict[str, Any]) -> None:
             cursor.execute(
                 f"""INSERT INTO job_classifications
                    (post_id, is_job, job_type, seniority, domain,
-                    work_mode, sentiment_score, urgency_score)
-                   VALUES ({ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph})
+                    work_mode, sentiment_score, urgency_score,
+                    confidence, llm_classified)
+                   VALUES ({ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph})
                    ON CONFLICT (post_id)
                    DO UPDATE SET is_job = EXCLUDED.is_job,
                                  job_type = EXCLUDED.job_type,
@@ -242,6 +243,8 @@ def insert_classification(classification: dict[str, Any]) -> None:
                                  work_mode = EXCLUDED.work_mode,
                                  sentiment_score = EXCLUDED.sentiment_score,
                                  urgency_score = EXCLUDED.urgency_score,
+                                 confidence = EXCLUDED.confidence,
+                                 llm_classified = EXCLUDED.llm_classified,
                                  classified_at = NOW()""",
                 (
                     classification["post_id"],
@@ -252,14 +255,17 @@ def insert_classification(classification: dict[str, Any]) -> None:
                     classification.get("work_mode"),
                     classification.get("sentiment_score"),
                     classification.get("urgency_score"),
+                    classification.get("confidence"),
+                    classification.get("llm_classified", False),
                 ),
             )
         else:
             cursor.execute(
                 """INSERT OR REPLACE INTO job_classifications
                    (post_id, is_job, job_type, seniority, domain,
-                    work_mode, sentiment_score, urgency_score)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                    work_mode, sentiment_score, urgency_score,
+                    confidence, llm_classified)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     classification["post_id"],
                     classification["is_job"],
@@ -269,6 +275,8 @@ def insert_classification(classification: dict[str, Any]) -> None:
                     classification.get("work_mode"),
                     classification.get("sentiment_score"),
                     classification.get("urgency_score"),
+                    classification.get("confidence"),
+                    classification.get("llm_classified", False),
                 ),
             )
         conn.commit()

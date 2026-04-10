@@ -22,11 +22,13 @@ CREATE TABLE IF NOT EXISTS job_classifications (
     post_id         TEXT UNIQUE NOT NULL,
     is_job          BOOLEAN NOT NULL DEFAULT 0,
     job_type        TEXT,          -- Full-time / Contract / Freelance / Internship
-    seniority       TEXT,          -- Junior / Mid / Senior / Lead
-    domain          TEXT,          -- Data, Software, Design, Marketing, etc.
+    seniority       TEXT,          -- Junior / Mid / Senior / Lead/Principal
+    domain          TEXT,          -- Software Engineering, Data & Analytics, etc.
     work_mode       TEXT,          -- Remote / Hybrid / On-site
     sentiment_score REAL,          -- -1.0 to 1.0
     urgency_score   REAL,          -- 0.0 to 1.0
+    confidence      REAL,          -- LLM confidence score 0.0 to 1.0
+    llm_classified  BOOLEAN DEFAULT 0,  -- 1 if classified by LLM, 0 if rule-based
     classified_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (post_id) REFERENCES posts(post_id)
 );
