@@ -1,7 +1,6 @@
 """Reddit Job Intelligence -- Streamlit Dashboard."""
 
 import sys
-import inspect
 from datetime import timedelta
 from pathlib import Path
 
@@ -833,14 +832,15 @@ def render_tech_trends(f: pd.DataFrame, tech: pd.DataFrame) -> None:
                  .reset_index(name="n")
                  .pivot(index="domain", columns="technology", values="n")
                  .fillna(0))
-        if "text_auto" in inspect.signature(px.imshow).parameters:
+        try:
             fig = px.imshow(
                 pivot,
                 color_continuous_scale=["#F8FAFC", "#1E3A5F"],
                 aspect="auto",
                 text_auto=True,
             )
-        else:
+        except TypeError:
+            # Older Plotly versions may not support text_auto.
             fig = px.imshow(
                 pivot,
                 color_continuous_scale=["#F8FAFC", "#1E3A5F"],
@@ -849,13 +849,14 @@ def render_tech_trends(f: pd.DataFrame, tech: pd.DataFrame) -> None:
         fig.update_layout(
             plot_bgcolor="white", paper_bgcolor="white", font=_FONT,
             margin=dict(l=4, r=4, t=4, b=4),
-            # Use nested coloraxis for cross-version compatibility.
+            # Use coloraxis dict form (instead of coloraxis_showscale) for broader compatibility.
             coloraxis=dict(showscale=False), xaxis_title="", yaxis_title="",
             height=400,
         )
         try:
             fig.update_traces(textfont_size=10)
         except (TypeError, ValueError, AttributeError):
+            # textfont_size is cosmetic; skip when unsupported by the active Plotly trace/version.
             pass
         st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
 
