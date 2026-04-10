@@ -1,6 +1,7 @@
 """Reddit Job Intelligence -- Streamlit Dashboard."""
 
 import sys
+import inspect
 from datetime import timedelta
 from pathlib import Path
 
@@ -812,16 +813,14 @@ def render_tech_trends(f: pd.DataFrame, tech: pd.DataFrame) -> None:
                  .reset_index(name="n")
                  .pivot(index="domain", columns="technology", values="n")
                  .fillna(0))
-        try:
+        if "text_auto" in inspect.signature(px.imshow).parameters:
             fig = px.imshow(
                 pivot,
                 color_continuous_scale=["#F8FAFC", "#1E3A5F"],
                 aspect="auto",
                 text_auto=True,
             )
-        except TypeError as exc:
-            if "text_auto" not in str(exc):
-                raise
+        else:
             fig = px.imshow(
                 pivot,
                 color_continuous_scale=["#F8FAFC", "#1E3A5F"],
@@ -833,11 +832,8 @@ def render_tech_trends(f: pd.DataFrame, tech: pd.DataFrame) -> None:
             coloraxis=dict(showscale=False), xaxis_title="", yaxis_title="",
             height=400,
         )
-        try:
+        if fig.data and hasattr(fig.data[0], "textfont"):
             fig.update_traces(textfont_size=10)
-        except TypeError as exc:
-            if "textfont_size" not in str(exc):
-                raise
         st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
 
     st.markdown('<div class="sec-head" style="margin-top:1.25rem">Common Tech Combinations</div>',
