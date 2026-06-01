@@ -3,7 +3,7 @@ praw>=7.7.0
 python-dotenv>=1.0.0
 
 # LLM classification
-openai>=1.0.0
+anthropic>=0.40.0
 
 # NLP (fallback enrichment)
 textblob>=0.18.0

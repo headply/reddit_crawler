@@ -1,0 +1,10 @@
+redditjobs.mayowaogedengbe.com {
+    reverse_proxy dashboard:8501
+}
+
+airflow.redditjobs.mayowaogedengbe.com {
+    basicauth {
+        admin {env.CADDY_BASIC_AUTH_HASH}
+    }
+    reverse_proxy airflow:8080
+}

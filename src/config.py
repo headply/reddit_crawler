@@ -3,40 +3,135 @@
 from typing import Final
 
 # ---------------------------------------------------------------------------
-# Target subreddits — focused job boards + active tech communities
+# Target subreddits — grouped for monitoring + per-group volume overrides
 # ---------------------------------------------------------------------------
-TARGET_SUBREDDITS: Final[list[str]] = [
-    # Dedicated job boards
-    "forhire",
-    "jobbit",
-    "remotejobs",
-    "techjobs",
-    "datajobs",
-    # Specialised job subreddits
-    "PythonJobs",
-    "webdevjobs",
-    "reactjobs",
-    "MLjobs",
-    "devopsjobs",
-    "cybersecurityjobs",
-    "uxjobs",
-    "gamedevjobs",
-    # Active tech communities with regular [Hiring] threads
-    "webdev",
-    "dataengineering",
-    "devops",
-    "MachineLearning",
-    "androiddev",
-    "iOSProgramming",
-    "netsec",
-    # Remote / freelance channels
-    "freelance",
-    "workonline",
-    "digitalnomad",
-]
+SUBREDDIT_GROUPS: Final[dict[str, list[str]]] = {
+    "tech_job_boards": [
+        "forhire",
+        "jobbit",
+        "remotejobs",
+        "techjobs",
+        "datajobs",
+        "PythonJobs",
+        "webdevjobs",
+        "reactjobs",
+        "MLjobs",
+        "devopsjobs",
+        "cybersecurityjobs",
+        "uxjobs",
+        "gamedevjobs",
+    ],
+    "tech_communities": [
+        "webdev",
+        "dataengineering",
+        "devops",
+        "MachineLearning",
+        "androiddev",
+        "iOSProgramming",
+        "netsec",
+        "freelance",
+        "workonline",
+        "digitalnomad",
+    ],
+    "broader_tech": [
+        "rust",
+        "golang",
+        "javascript",
+        "learnprogramming",
+        "ExperiencedDevs",
+        "csMajors",
+        "ITCareerQuestions",
+        "sysadmin",
+        "aws",
+        "kubernetes",
+        "datascience",
+        "analytics",
+        "learnmachinelearning",
+        "computervision",
+        "deeplearning",
+        "LLMDevs",
+    ],
+    "non_tech": [
+        "marketing",
+        "sales",
+        "SEO",
+        "contentmarketing",
+        "digital_marketing",
+        "GraphicDesign",
+        "web_design",
+        "copywriting",
+        "writing",
+        "freelanceWriters",
+        "accounting",
+        "FinanceCareers",
+        "ProductManagement",
+        "startups",
+        "Entrepreneur",
+        "smallbusiness",
+        "agency",
+    ],
+    "geo_africa": [
+        "nigeria",
+        "lagos",
+        "kenya",
+        "southafrica",
+        "tech_jobs_africa",
+        "AfricanTech",
+    ],
+    "geo_india": [
+        "developersIndia",
+        "indianstartups",
+    ],
+    "geo_emerging": [
+        "brazil",
+        "latam",
+        "philippines",
+    ],
+    "remote_specific": [
+        "remotework",
+        "WorkOnline",
+        "beermoney",
+        "juststart",
+        "slavelabour",
+        "HireaWriter",
+        "HireanArtist",
+        "HireanEditor",
+    ],
+    "for_hire_focused": [
+        "forhire",
+        "slavelabour",
+        "HireaWriter",
+        "HireanArtist",
+        "HireanEditor",
+        "freelanceWriters",
+    ],
+}
+
+_TARGETS: list[str] = [s for group in SUBREDDIT_GROUPS.values() for s in group]
+TARGET_SUBREDDITS: Final[list[str]] = list(dict.fromkeys(_TARGETS))
 
 # Number of posts to fetch per subreddit per run
 POSTS_PER_SUBREDDIT: Final[int] = 50
+
+POSTS_PER_GROUP: Final[dict[str, int]] = {
+    "for_hire_focused": 100,
+    "geo_africa": 25,
+    "geo_india": 25,
+    "geo_emerging": 25,
+}
+
+SUBREDDIT_TO_GROUP: Final[dict[str, str]] = {
+    subreddit: group
+    for group, subs in SUBREDDIT_GROUPS.items()
+    for subreddit in subs
+}
+
+SUBREDDIT_INCLUDE_KEYWORDS: Final[dict[str, list[str]]] = {
+    "beermoney": [
+        "hiring", "job", "contract", "freelance", "gig",
+        "task", "project", "remote", "part-time",
+    ]
+}
 
 # ---------------------------------------------------------------------------
 # Domain categories — used as LLM fallback and for reference
@@ -77,6 +172,7 @@ DOMAIN_PATTERNS: Final[dict[str, list[str]]] = {
     "Marketing & Growth": [
         "marketing", "seo", "content writer", "growth hacker", "social media",
         "digital marketing", "email marketing", "copywriter", "paid ads",
+        "sales", "account executive", "account manager", "business development",
     ],
     "Security": [
         "security engineer", "cybersecurity", "infosec", "penetration tester",
@@ -97,6 +193,7 @@ DOMAIN_PATTERNS: Final[dict[str, list[str]]] = {
     "Finance & FinTech": [
         "fintech", "quantitative", "quant ", "financial engineer",
         "trading systems", "banking software", "payments engineer",
+        "accounting", "bookkeeper", "controller", "cpa",
     ],
 }
 
@@ -115,10 +212,14 @@ JOB_TYPE_PATTERNS: Final[dict[str, list[str]]] = {
 # Seniority patterns (fallback)
 # ---------------------------------------------------------------------------
 SENIORITY_PATTERNS: Final[dict[str, list[str]]] = {
+    "Intern": ["intern", "internship", "co-op", "trainee"],
     "Junior": ["junior", "jr", "entry level", "entry-level", "associate", "new grad"],
     "Mid": ["mid-level", "mid level", "intermediate", "2-5 years", "3+ years"],
     "Senior": ["senior", "sr", "experienced", "5+ years", "7+ years"],
-    "Lead/Principal": ["lead", "principal", "staff", "architect", "head of", "director", "vp"],
+    "Staff": ["staff engineer", "staff"],
+    "Principal": ["principal"],
+    "Lead/Manager": ["lead", "manager", "team lead", "head of"],
+    "Director+": ["director", "vp", "vice president", "chief", "cto", "cpo", "ciso", "ceo"],
 }
 
 # ---------------------------------------------------------------------------

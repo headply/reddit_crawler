@@ -12,7 +12,13 @@ from typing import Any, Optional
 import praw
 from praw.models import Submission
 
-from src.config import POSTS_PER_SUBREDDIT, TARGET_SUBREDDITS
+from src.config import (
+    POSTS_PER_GROUP,
+    POSTS_PER_SUBREDDIT,
+    SUBREDDIT_INCLUDE_KEYWORDS,
+    SUBREDDIT_TO_GROUP,
+    TARGET_SUBREDDITS,
+)
 from src.db import get_connection, insert_post
 
 logger = logging.getLogger(__name__)
@@ -68,6 +74,16 @@ def extract_post_data(submission: Submission) -> dict[str, Any]:
     }
 
 
+def _passes_subreddit_filters(subreddit_name: str, post: dict[str, Any]) -> bool:
+    """Apply subreddit-specific include filters when configured."""
+    keywords = SUBREDDIT_INCLUDE_KEYWORDS.get(subreddit_name.lower())
+    if not keywords:
+        return True
+
+    text = f"{post.get('title', '')} {post.get('body', '')}".lower()
+    return any(kw in text for kw in keywords)
+
+
 def get_existing_post_ids(subreddit: str) -> set[str]:
     """Get set of already-scraped post IDs for a subreddit.
 
@@ -115,6 +131,8 @@ def scrape_subreddit(
         for submission in subreddit.new(limit=limit):
             if submission.id not in existing_ids:
                 post_data = extract_post_data(submission)
+                if not _passes_subreddit_filters(subreddit_name, post_data):
+                    continue
                 if insert_post(post_data):
                     new_posts.append(post_data)
                     logger.info("Scraped: [%s] %s", subreddit_name, submission.title[:60])
@@ -146,8 +164,10 @@ def scrape_all(
     all_posts: list[dict[str, Any]] = []
 
     def _scrape(sub_name: str) -> list[dict[str, Any]]:
+        group = SUBREDDIT_TO_GROUP.get(sub_name)
+        per_group_limit = POSTS_PER_GROUP.get(group, limit)
         logger.info("Scraping r/%s ...", sub_name)
-        posts = scrape_subreddit(reddit, sub_name, limit)
+        posts = scrape_subreddit(reddit, sub_name, per_group_limit)
         logger.info("Found %d new posts in r/%s", len(posts), sub_name)
         return posts
 

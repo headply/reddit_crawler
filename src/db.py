@@ -122,9 +122,55 @@ def init_db() -> None:
     try:
         schema_sql = SCHEMA_PATH.read_text()
         conn.executescript(schema_sql)
+        _apply_sqlite_v2_migrations(conn)
         conn.commit()
     finally:
         conn.close()
+
+
+def _sqlite_column_exists(conn, table: str, column: str) -> bool:
+    """Return True if the SQLite table already contains a column."""
+    rows = conn.execute(f"PRAGMA table_info({table})").fetchall()
+    return any(row["name"] == column for row in rows)
+
+
+def _sqlite_add_column_if_missing(conn, table: str, ddl: str) -> None:
+    """Add a column to a SQLite table if it does not exist."""
+    col_name = ddl.split()[0]
+    if not _sqlite_column_exists(conn, table, col_name):
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN {ddl}")
+
+
+def _apply_sqlite_v2_migrations(conn) -> None:
+    """Apply SQLite-compatible schema updates for v2 features."""
+    _sqlite_add_column_if_missing(conn, "posts", "content_hash TEXT")
+    _sqlite_add_column_if_missing(conn, "posts", "title_tokens TEXT")
+    _sqlite_add_column_if_missing(conn, "posts", "dedup_status TEXT DEFAULT 'unique'")
+    _sqlite_add_column_if_missing(conn, "posts", "canonical_post_id TEXT")
+    _sqlite_add_column_if_missing(conn, "posts", "raw_body_purged_at TIMESTAMP")
+
+    _sqlite_add_column_if_missing(conn, "job_classifications", "industry_vertical TEXT")
+    _sqlite_add_column_if_missing(conn, "job_classifications", "company_stage TEXT")
+    _sqlite_add_column_if_missing(conn, "job_classifications", "compensation_min INTEGER")
+    _sqlite_add_column_if_missing(conn, "job_classifications", "compensation_max INTEGER")
+    _sqlite_add_column_if_missing(conn, "job_classifications", "compensation_currency TEXT")
+    _sqlite_add_column_if_missing(conn, "job_classifications", "compensation_period TEXT")
+    _sqlite_add_column_if_missing(conn, "job_classifications", "equity_mentioned BOOLEAN DEFAULT 0")
+    _sqlite_add_column_if_missing(conn, "job_classifications", "is_scam BOOLEAN DEFAULT 0")
+    _sqlite_add_column_if_missing(conn, "job_classifications", "scam_reasons TEXT")
+    _sqlite_add_column_if_missing(conn, "job_classifications", "post_category TEXT")
+
+    conn.execute(
+        """CREATE TABLE IF NOT EXISTS subreddit_health (
+               subreddit TEXT NOT NULL,
+               date DATE NOT NULL,
+               posts_scraped INTEGER DEFAULT 0,
+               jobs_found INTEGER DEFAULT 0,
+               scams_flagged INTEGER DEFAULT 0,
+               dedup_rate REAL,
+               PRIMARY KEY (subreddit, date)
+           )"""
+    )
 
 
 def execute_query(
@@ -233,8 +279,12 @@ def insert_classification(classification: dict[str, Any]) -> None:
                 f"""INSERT INTO job_classifications
                    (post_id, is_job, job_type, seniority, domain,
                     work_mode, sentiment_score, urgency_score,
-                    confidence, llm_classified)
-                   VALUES ({ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph})
+                    confidence, llm_classified, industry_vertical,
+                    company_stage, compensation_min, compensation_max,
+                    compensation_currency, compensation_period,
+                    equity_mentioned, is_scam, scam_reasons, post_category)
+                   VALUES ({ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph},
+                           {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph})
                    ON CONFLICT (post_id)
                    DO UPDATE SET is_job = EXCLUDED.is_job,
                                  job_type = EXCLUDED.job_type,
@@ -245,6 +295,16 @@ def insert_classification(classification: dict[str, Any]) -> None:
                                  urgency_score = EXCLUDED.urgency_score,
                                  confidence = EXCLUDED.confidence,
                                  llm_classified = EXCLUDED.llm_classified,
+                                 industry_vertical = EXCLUDED.industry_vertical,
+                                 company_stage = EXCLUDED.company_stage,
+                                 compensation_min = EXCLUDED.compensation_min,
+                                 compensation_max = EXCLUDED.compensation_max,
+                                 compensation_currency = EXCLUDED.compensation_currency,
+                                 compensation_period = EXCLUDED.compensation_period,
+                                 equity_mentioned = EXCLUDED.equity_mentioned,
+                                 is_scam = EXCLUDED.is_scam,
+                                 scam_reasons = EXCLUDED.scam_reasons,
+                                 post_category = EXCLUDED.post_category,
                                  classified_at = NOW()""",
                 (
                     classification["post_id"],
@@ -257,6 +317,16 @@ def insert_classification(classification: dict[str, Any]) -> None:
                     classification.get("urgency_score"),
                     classification.get("confidence"),
                     classification.get("llm_classified", False),
+                    classification.get("industry_vertical"),
+                    classification.get("company_stage"),
+                    classification.get("compensation_min"),
+                    classification.get("compensation_max"),
+                    classification.get("compensation_currency"),
+                    classification.get("compensation_period"),
+                    classification.get("equity_mentioned"),
+                    classification.get("is_scam"),
+                    classification.get("scam_reasons"),
+                    classification.get("post_category"),
                 ),
             )
         else:
@@ -264,8 +334,11 @@ def insert_classification(classification: dict[str, Any]) -> None:
                 """INSERT OR REPLACE INTO job_classifications
                    (post_id, is_job, job_type, seniority, domain,
                     work_mode, sentiment_score, urgency_score,
-                    confidence, llm_classified)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    confidence, llm_classified, industry_vertical,
+                    company_stage, compensation_min, compensation_max,
+                    compensation_currency, compensation_period,
+                    equity_mentioned, is_scam, scam_reasons, post_category)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     classification["post_id"],
                     classification["is_job"],
@@ -277,9 +350,101 @@ def insert_classification(classification: dict[str, Any]) -> None:
                     classification.get("urgency_score"),
                     classification.get("confidence"),
                     classification.get("llm_classified", False),
+                    classification.get("industry_vertical"),
+                    classification.get("company_stage"),
+                    classification.get("compensation_min"),
+                    classification.get("compensation_max"),
+                    classification.get("compensation_currency"),
+                    classification.get("compensation_period"),
+                    classification.get("equity_mentioned"),
+                    classification.get("is_scam"),
+                    classification.get("scam_reasons"),
+                    classification.get("post_category"),
                 ),
             )
         conn.commit()
+    finally:
+        conn.close()
+
+
+def refresh_views() -> dict[str, int]:
+    """Refresh materialized views and update subreddit health metrics."""
+    if not _is_postgres():
+        logger.info("Skipping materialized view refresh on SQLite.")
+        return {"refreshed": 0}
+
+    views = [
+        "mv_skill_demand_weekly",
+        "mv_domain_volume_weekly",
+        "mv_compensation_by_role",
+        "mv_subreddit_quality",
+    ]
+    conn = get_connection()
+    try:
+        conn.autocommit = True
+        cursor = conn.cursor()
+        _update_subreddit_health(cursor)
+        refreshed = 0
+        for view in views:
+            try:
+                cursor.execute(f"REFRESH MATERIALIZED VIEW CONCURRENTLY {view}")
+                refreshed += 1
+            except Exception as exc:
+                logger.warning("Failed to refresh %s: %s", view, exc)
+        return {"refreshed": refreshed}
+    finally:
+        conn.close()
+
+
+def _update_subreddit_health(cursor) -> None:
+    """Upsert daily subreddit health metrics (PostgreSQL only)."""
+    cursor.execute(
+        """INSERT INTO subreddit_health
+           (subreddit, date, posts_scraped, jobs_found, scams_flagged, dedup_rate)
+           SELECT
+               p.subreddit,
+               CURRENT_DATE AS date,
+               COUNT(*) AS posts_scraped,
+               SUM(CASE WHEN jc.is_job THEN 1 ELSE 0 END) AS jobs_found,
+               SUM(CASE WHEN COALESCE(jc.is_scam, FALSE) THEN 1 ELSE 0 END) AS scams_flagged,
+               SUM(CASE WHEN COALESCE(p.dedup_status, 'unique') != 'unique' THEN 1 ELSE 0 END)::float
+               / NULLIF(COUNT(*), 0) AS dedup_rate
+           FROM posts p
+           LEFT JOIN job_classifications jc ON p.post_id = jc.post_id
+           WHERE p.scraped_at::date = CURRENT_DATE
+           GROUP BY p.subreddit
+           ON CONFLICT (subreddit, date)
+           DO UPDATE SET
+               posts_scraped = EXCLUDED.posts_scraped,
+               jobs_found = EXCLUDED.jobs_found,
+               scams_flagged = EXCLUDED.scams_flagged,
+               dedup_rate = EXCLUDED.dedup_rate"""
+    )
+
+
+def cleanup_old_raw() -> int:
+    """Clear raw post bodies older than 90 days and set purge timestamp."""
+    conn = get_connection()
+    try:
+        cursor = conn.cursor()
+        if _is_postgres():
+            cursor.execute(
+                """UPDATE posts
+                   SET body = NULL,
+                       raw_body_purged_at = NOW()
+                   WHERE created_utc < NOW() - INTERVAL '90 days'
+                     AND raw_body_purged_at IS NULL"""
+            )
+        else:
+            cursor.execute(
+                """UPDATE posts
+                   SET body = NULL,
+                       raw_body_purged_at = CURRENT_TIMESTAMP
+                   WHERE created_utc < datetime('now', '-90 days')
+                     AND raw_body_purged_at IS NULL"""
+            )
+        conn.commit()
+        return cursor.rowcount
     finally:
         conn.close()
 

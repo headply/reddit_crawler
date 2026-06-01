@@ -201,13 +201,32 @@ def enrich_post(post: dict[str, Any]) -> dict[str, Any]:
 
     is_job = classify_is_job(title, body)
 
+    post_category = "hiring" if is_job else "discussion"
+    title_lower = title.lower()
+    if "[for hire]" in title_lower or "for hire" in title_lower:
+        post_category = "for_hire"
+    if title_lower.startswith("?") or any(
+        title_lower.startswith(pfx) for pfx in ["what is", "how do i", "should i", "is it worth", "why does"]
+    ):
+        post_category = "advice_request"
+
     classification: dict[str, Any] = {
         "post_id": post_id,
         "is_job": is_job,
+        "post_category": post_category,
         "job_type": classify_job_type(title, body) if is_job else None,
         "seniority": classify_seniority(title, body) if is_job else None,
         "domain": classify_domain(title, body) if is_job else None,
         "work_mode": classify_work_mode(title, body) if is_job else None,
+        "industry_vertical": None,
+        "company_stage": None,
+        "compensation_min": None,
+        "compensation_max": None,
+        "compensation_currency": None,
+        "compensation_period": None,
+        "equity_mentioned": False,
+        "is_scam": None,
+        "scam_reasons": None,
         "sentiment_score": compute_sentiment(title, body),
         "urgency_score": compute_urgency(title, body) if is_job else 0.0,
         "tech_stack": extract_tech_stack(title, body) if is_job else [],

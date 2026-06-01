@@ -73,6 +73,12 @@ def enrich_and_store(posts: list[dict[str, Any]]) -> int:
     llm = openai_available()
     for result in results:
         try:
+            post_category = result.get("post_category")
+            if post_category is None:
+                post_category = "hiring" if result.get("is_job") else "other"
+            result["post_category"] = post_category
+            result["is_job"] = post_category in {"hiring", "for_hire", "gig_freelance"}
+
             tech_stack = result.pop("tech_stack", [])
             insert_classification({**result, "llm_classified": llm})
             if tech_stack:
@@ -108,12 +114,44 @@ def run_pipeline(skip_scrape: bool = False) -> dict[str, int]:
     else:
         logger.info("Step 1: Skipping scrape.")
 
-    logger.info("Step 2: Classifying unprocessed posts...")
+    logger.info("Step 2: Running deduplication...")
+    try:
+        from src.dedupe import run_dedup
+
+        run_dedup()
+    except Exception as exc:
+        logger.error("Deduplication failed: %s", exc)
+
+    logger.info("Step 3: Classifying unprocessed posts...")
     unprocessed = get_unprocessed_posts()
     logger.info("Found %d unprocessed posts.", len(unprocessed))
 
     classified_count = enrich_and_store(unprocessed)
     logger.info("Classified %d posts.", classified_count)
+
+    logger.info("Step 4: Scam detection...")
+    try:
+        from src.nlp.scam_detector import flag_scams
+
+        flag_scams()
+    except Exception as exc:
+        logger.error("Scam detection failed: %s", exc)
+
+    logger.info("Step 5: Refreshing analytics views...")
+    try:
+        from src.db import refresh_views
+
+        refresh_views()
+    except Exception as exc:
+        logger.error("View refresh failed: %s", exc)
+
+    logger.info("Step 6: Cleaning up old raw data...")
+    try:
+        from src.db import cleanup_old_raw
+
+        cleanup_old_raw()
+    except Exception as exc:
+        logger.error("Raw cleanup failed: %s", exc)
 
     logger.info("=" * 60)
     logger.info(
