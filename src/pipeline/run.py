@@ -40,11 +40,12 @@ def get_unprocessed_posts() -> list[dict[str, Any]]:
     return [dict(row) for row in rows]
 
 
-def enrich_and_store(posts: list[dict[str, Any]]) -> int:
+def enrich_and_store(posts: list[dict[str, Any]], max_workers: int = 10) -> int:
     """Classify posts and store results. Uses LLM sieve when available.
 
     Args:
         posts: List of unclassified post dicts.
+        max_workers: Parallel API calls for the LLM classifier.
 
     Returns:
         Number of posts successfully classified and stored.
@@ -55,11 +56,11 @@ def enrich_and_store(posts: list[dict[str, Any]]) -> int:
         return 0
 
     if openai_available():
-        logger.info("OpenAI key detected — using LLM classifier.")
-        results = classify_posts_batch(posts)
+        logger.info("Anthropic key detected — using LLM classifier.")
+        results = classify_posts_batch(posts, max_workers=max_workers)
     else:
         logger.warning(
-            "OPENAI_API_KEY not set — falling back to rule-based enrichment."
+            "ANTHROPIC_API_KEY not set — falling back to rule-based enrichment."
         )
         from src.nlp.enrichment import enrich_post
         results = []
@@ -70,7 +71,7 @@ def enrich_and_store(posts: list[dict[str, Any]]) -> int:
                 logger.error("Rule-based enrichment failed for %s: %s", post.get("post_id"), exc)
 
     stored = 0
-    llm = openai_available()
+    llm = openai_available()  # True when ANTHROPIC_API_KEY is set
     for result in results:
         try:
             post_category = result.get("post_category")

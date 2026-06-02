@@ -14,9 +14,13 @@ logger = logging.getLogger(__name__)
 DEFAULT_ARGS: dict[str, Any] = {
     "owner": "mayowa",
     "email_on_failure": False,
-    "retries": 2,
+    "retries": 1,
     "retry_delay": timedelta(minutes=5),
+    "execution_timeout": timedelta(minutes=20),
 }
+
+# Max posts to classify per DAG run — prevents runaway API spend on first run
+CLASSIFY_BATCH_LIMIT = 50
 
 
 def scrape_reddit_task(**context: Any) -> dict[str, int]:
@@ -42,14 +46,19 @@ def dedupe_posts_task(**context: Any) -> dict[str, int]:
 
 
 def classify_posts_task(**context: Any) -> dict[str, int]:
-    """Classify unprocessed posts and store results."""
+    """Classify unprocessed posts and store results (capped per run)."""
     from src.pipeline.run import enrich_and_store, get_unprocessed_posts
 
     posts = get_unprocessed_posts()
-    count = enrich_and_store(posts)
+    total = len(posts)
+    # Cap per run to avoid heartbeat timeouts and runaway API spend
+    posts = posts[:CLASSIFY_BATCH_LIMIT]
+    logger.info("Classifying %d of %d unprocessed posts.", len(posts), total)
+    count = enrich_and_store(posts, max_workers=5)
     logger.info("Classified %d posts.", count)
     context["ti"].xcom_push(key="classified_count", value=count)
-    return {"classified_count": count}
+    context["ti"].xcom_push(key="pending_count", value=max(0, total - len(posts)))
+    return {"classified_count": count, "pending_count": max(0, total - len(posts))}
 
 
 def detect_scams_task(**context: Any) -> dict[str, int]:
