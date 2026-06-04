@@ -1,17 +1,35 @@
 """LLM-based job post classifier using Claude Haiku.
 
 Sends each post's title + body excerpt to claude-haiku-4-5 and receives a
-structured JSON classification in a single call. This replaces the
-fragile rule-based keyword matching with proper language understanding.
+structured JSON classification in a single call.
 
-Fallback: if ANTHROPIC_API_KEY is not set, falls back to the rule-based
-enrichment module so the pipeline never hard-crashes.
+Resilience design:
+
+* Each LLM call is retried up to 4 times with exponential backoff +
+  jitter on transient errors (rate limits, timeouts, connection errors).
+* A per-batch ``LLMCircuitBreaker`` counts post-retry failures. After
+  ``threshold`` consecutive failures, the breaker trips and the remainder
+  of the batch is routed through ``src.nlp.enrichment.enrich_post`` — the
+  pipeline NEVER fails because of an LLM issue.
+* If ``ANTHROPIC_API_KEY`` is missing the breaker is force-tripped on
+  entry, and every post is routed straight through the rule fallback.
+* ``classify_posts_batch`` never raises. Callers receive a list of
+  classifications matching the input length minus any post whose
+  pre-filter or rule fallback emitted nothing (which never happens with
+  the current implementation).
 """
+
+from __future__ import annotations
 
 import json
 import logging
 import os
+import random
+import time
 from typing import Any
+
+from src.nlp.circuit_breaker import LLMCircuitBreaker
+from src.nlp.enrichment import enrich_post as rule_enrich_post
 
 logger = logging.getLogger(__name__)
 
@@ -49,8 +67,9 @@ def _quick_reject_category(title: str, body: str) -> str | None:
 
     return None
 
+
 # ---------------------------------------------------------------------------
-# System prompt — defines the classification contract
+# System prompt
 # ---------------------------------------------------------------------------
 _SYSTEM_PROMPT = """You are a job posting classifier for a Reddit job intelligence platform.
 
@@ -79,66 +98,79 @@ Rules:
 - tech_stack: list specific named technologies (e.g. "Python", "React", "AWS"). Empty array if none mentioned.
 - urgency_score: 0.0–1.0. Higher when post uses words like ASAP, immediately, urgent, start Monday, deadline.
 - confidence: 0.0–1.0. How certain you are this is correctly classified.
-- Return ONLY the JSON object with no additional text, markdown, or explanation.
-
-Examples:
-
-Input:
-Title: [Hiring] Senior Backend Engineer (Python) - Remote - $150k-$180k
-Body: Acme Analytics (Series A) is hiring a senior backend engineer. Stack: Python, Postgres, AWS. Equity available.
-Output:
-{"post_category":"hiring","job_type":"Full-time","domain":"Software Engineering","seniority":"Senior","work_mode":"Remote","industry_vertical":"saas","company_stage":"series-a","compensation_min":150000,"compensation_max":180000,"compensation_currency":"USD","compensation_period":"annual","equity_mentioned":true,"tech_stack":["Python","Postgres","AWS"],"urgency_score":0.2,"confidence":0.86}
-
-Input:
-Title: [For Hire] Freelance Product Designer - UI/UX
-Body: Solo designer available for freelance gigs. Figma, mobile apps, dashboards.
-Output:
-{"post_category":"for_hire","job_type":"Freelance","domain":"Design & UX","seniority":null,"work_mode":null,"industry_vertical":null,"company_stage":"bootstrapped/indie","compensation_min":null,"compensation_max":null,"compensation_currency":null,"compensation_period":"project","equity_mentioned":false,"tech_stack":["Figma"],"urgency_score":0.1,"confidence":0.74}
-
-Input:
-Title: Should I learn Go or Rust for backend roles?
-Body: Looking for advice on which language will help me get a job.
-Output:
-{"post_category":"advice_request","job_type":null,"domain":null,"seniority":null,"work_mode":null,"industry_vertical":null,"company_stage":null,"compensation_min":null,"compensation_max":null,"compensation_currency":null,"compensation_period":null,"equity_mentioned":false,"tech_stack":["Go","Rust"],"urgency_score":0.0,"confidence":0.9}
-
-Input:
-Title: Remote Data Entry - $200/hr - Contact via WhatsApp only
-Body: No experience needed. Training available after a small fee. Message +234...
-Output:
-{"post_category":"scam","job_type":"Contract","domain":null,"seniority":null,"work_mode":"Remote","industry_vertical":"other","company_stage":"unknown","compensation_min":200,"compensation_max":200,"compensation_currency":"USD","compensation_period":"hourly","equity_mentioned":false,"tech_stack":[],"urgency_score":0.4,"confidence":0.88}"""
+- Return ONLY the JSON object with no additional text, markdown, or explanation."""
 
 
+# ---------------------------------------------------------------------------
+# Client + retry helpers
+# ---------------------------------------------------------------------------
 def _get_client():
-    """Lazy-import and return an Anthropic client."""
     import anthropic  # noqa: PLC0415
+
     api_key = os.getenv("ANTHROPIC_API_KEY")
     if not api_key:
-        raise RuntimeError(
-            "ANTHROPIC_API_KEY environment variable is not set. "
-            "Add it to your .env file or environment."
-        )
+        raise RuntimeError("ANTHROPIC_API_KEY environment variable is not set.")
     return anthropic.Anthropic(api_key=api_key)
 
 
-def classify_post(post: dict[str, Any]) -> dict[str, Any]:
-    """Classify a single Reddit post using Claude Haiku.
+def _is_retryable(exc: BaseException) -> bool:
+    """Return True for transient Anthropic SDK errors worth retrying."""
+    try:
+        import anthropic  # noqa: PLC0415
+    except ImportError:
+        return False
+    retryable = (
+        anthropic.RateLimitError,
+        anthropic.APITimeoutError,
+        anthropic.APIConnectionError,
+        anthropic.InternalServerError,
+    )
+    if isinstance(exc, retryable):
+        return True
+    # Some HTTP 5xx surface as generic APIError — retry those too.
+    api_error = getattr(anthropic, "APIStatusError", None)
+    if api_error and isinstance(exc, api_error):
+        status = getattr(exc, "status_code", None)
+        return status is not None and status >= 500
+    return False
 
-    Args:
-        post: Dict with at minimum post_id, title, body.
 
-    Returns:
-        Classification dict with post_id and all classification fields.
+def _retrying_call(fn, *, max_attempts: int = 4, base: float = 1.5, cap: float = 30.0):
+    """Run ``fn()`` with exponential backoff + jitter on transient errors."""
+    attempt = 0
+    while True:
+        try:
+            return fn()
+        except Exception as exc:  # noqa: BLE001
+            attempt += 1
+            if attempt >= max_attempts or not _is_retryable(exc):
+                raise
+            delay = min(cap, base * (2 ** (attempt - 1)))
+            delay += random.uniform(0, delay * 0.25)
+            logger.info(
+                "LLM call retry %d/%d after %.1fs (%s)",
+                attempt, max_attempts - 1, delay, exc.__class__.__name__,
+            )
+            time.sleep(delay)
 
-    Raises:
-        RuntimeError: If ANTHROPIC_API_KEY is missing.
-        Exception: Re-raises API errors after logging.
-    """
-    client = _get_client()
+
+# ---------------------------------------------------------------------------
+# Classification primitives
+# ---------------------------------------------------------------------------
+def _coerce_int(value: Any) -> int | None:
+    try:
+        return int(float(value)) if value is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _llm_classify_one(client, post: dict[str, Any]) -> dict[str, Any]:
+    """Single LLM call with retry. Raises on unrecoverable errors."""
     title = post.get("title", "")
     body = (post.get("body") or "")[:500]
 
-    try:
-        response = client.messages.create(
+    def _call():
+        return client.messages.create(
             model=_MODEL,
             max_tokens=300,
             system=[{
@@ -151,133 +183,184 @@ def classify_post(post: dict[str, Any]) -> dict[str, Any]:
             ],
         )
 
-        raw = json.loads(response.content[0].text)
+    response = _retrying_call(_call)
+    raw = json.loads(response.content[0].text)
 
-        def _to_int(value: Any) -> int | None:
-            try:
-                return int(float(value)) if value is not None else None
-            except (TypeError, ValueError):
-                return None
+    post_category = raw.get("post_category")
+    is_job = post_category in {"hiring", "for_hire", "gig_freelance"}
 
-        post_category = raw.get("post_category")
-        is_job = post_category in {"hiring", "for_hire", "gig_freelance"}
+    return {
+        "post_id": post["post_id"],
+        "post_category": post_category,
+        "is_job": is_job,
+        "job_type": raw.get("job_type"),
+        "domain": raw.get("domain"),
+        "seniority": raw.get("seniority"),
+        "work_mode": raw.get("work_mode"),
+        "industry_vertical": raw.get("industry_vertical"),
+        "company_stage": raw.get("company_stage"),
+        "compensation_min": _coerce_int(raw.get("compensation_min")),
+        "compensation_max": _coerce_int(raw.get("compensation_max")),
+        "compensation_currency": raw.get("compensation_currency"),
+        "compensation_period": raw.get("compensation_period"),
+        "equity_mentioned": bool(raw.get("equity_mentioned", False)),
+        "tech_stack": raw.get("tech_stack") or [],
+        "urgency_score": float(raw.get("urgency_score", 0.0)),
+        "confidence": float(raw.get("confidence", 0.0)),
+        "sentiment_score": 0.0,
+        "llm_classified": True,
+    }
 
-        result: dict[str, Any] = {
-            "post_id": post["post_id"],
-            "post_category": post_category,
-            "is_job": is_job,
-            "job_type": raw.get("job_type"),
-            "domain": raw.get("domain"),
-            "seniority": raw.get("seniority"),
-            "work_mode": raw.get("work_mode"),
-            "industry_vertical": raw.get("industry_vertical"),
-            "company_stage": raw.get("company_stage"),
-            "compensation_min": _to_int(raw.get("compensation_min")),
-            "compensation_max": _to_int(raw.get("compensation_max")),
-            "compensation_currency": raw.get("compensation_currency"),
-            "compensation_period": raw.get("compensation_period"),
-            "equity_mentioned": bool(raw.get("equity_mentioned", False)),
-            "tech_stack": raw.get("tech_stack") or [],
-            "urgency_score": float(raw.get("urgency_score", 0.0)),
-            "confidence": float(raw.get("confidence", 0.0)),
-            "sentiment_score": 0.0,  # kept for schema compatibility
-            "llm_classified": True,
-        }
 
-        logger.info(
-            "Classified %s: category=%s domain=%s seniority=%s conf=%.2f",
-            post["post_id"],
-            result["post_category"],
-            result["domain"],
-            result["seniority"],
-            result["confidence"],
-        )
-        return result
+def classify_post(post: dict[str, Any]) -> dict[str, Any]:
+    """Classify a single Reddit post via Claude Haiku. Raises on failure."""
+    client = _get_client()
+    result = _llm_classify_one(client, post)
+    logger.info(
+        "LLM classified %s: category=%s domain=%s conf=%.2f",
+        post.get("post_id"), result["post_category"], result["domain"],
+        result["confidence"],
+    )
+    return result
 
-    except Exception as exc:
-        logger.error("LLM classification failed for %s: %s", post.get("post_id"), exc)
-        raise
+
+# ---------------------------------------------------------------------------
+# Batch entry point
+# ---------------------------------------------------------------------------
+def _pre_filter_reject(post: dict[str, Any]) -> dict[str, Any] | None:
+    """Return a fully-formed classification when the post is obviously not a job."""
+    category = _quick_reject_category(
+        post.get("title", ""),
+        post.get("body", "") or "",
+    )
+    if not category:
+        return None
+    return {
+        "post_id": post["post_id"],
+        "post_category": category,
+        "is_job": False,
+        "job_type": None,
+        "domain": None,
+        "seniority": None,
+        "work_mode": None,
+        "industry_vertical": None,
+        "company_stage": None,
+        "compensation_min": None,
+        "compensation_max": None,
+        "compensation_currency": None,
+        "compensation_period": None,
+        "equity_mentioned": False,
+        "tech_stack": [],
+        "urgency_score": 0.0,
+        "confidence": 1.0,
+        "sentiment_score": 0.0,
+        "llm_classified": False,
+    }
+
+
+def _rule_fallback(post: dict[str, Any]) -> dict[str, Any]:
+    """Run the high-precision rule fallback. Always succeeds."""
+    result = rule_enrich_post(post)
+    result["llm_classified"] = False
+    return result
 
 
 def classify_posts_batch(
     posts: list[dict[str, Any]],
     max_workers: int = 20,
+    breaker: LLMCircuitBreaker | None = None,
 ) -> list[dict[str, Any]]:
-    """Classify a list of posts concurrently using a thread pool.
+    """Classify a list of posts. Never raises.
 
-    Applies a fast keyword pre-filter first to skip obvious non-jobs
-    without making any API call, then classifies the remainder in parallel.
+    Strategy:
+      1. Pre-filter obvious non-jobs without calling the API.
+      2. For the rest, fan out to the LLM with a thread pool.
+      3. Each call retries up to 4 times on transient errors.
+      4. Track post-retry failures in the circuit breaker. When it trips,
+         stop the pool and route the remainder through ``_rule_fallback``.
+      5. Any individual exception that escapes the retry loop also routes
+         that post through the rule fallback and increments the breaker.
 
-    Args:
-        posts: List of post dicts.
-        max_workers: Number of parallel API calls (default 20).
-
-    Returns:
-        List of successfully classified results (jobs and non-jobs).
-        Failed posts are skipped and logged.
+    The returned list always covers every input post.
     """
-    from concurrent.futures import ThreadPoolExecutor, as_completed
+    if not posts:
+        return []
 
-    # Pre-filter: mark obvious non-jobs without calling the API
-    to_classify, pre_rejected = [], []
-    for post in posts:
-        category = _quick_reject_category(
-            post.get("title", ""),
-            post.get("body", "") or "",
+    if breaker is None:
+        breaker = LLMCircuitBreaker(threshold=5, name="llm_sieve")
+
+    if not openai_available():
+        logger.warning(
+            "ANTHROPIC_API_KEY not set — routing all %d posts through rule fallback.",
+            len(posts),
         )
-        if category:
-            pre_rejected.append({
-                "post_id": post["post_id"],
-                "post_category": category,
-                "is_job": False,
-                "job_type": None,
-                "domain": None,
-                "seniority": None,
-                "work_mode": None,
-                "industry_vertical": None,
-                "company_stage": None,
-                "compensation_min": None,
-                "compensation_max": None,
-                "compensation_currency": None,
-                "compensation_period": None,
-                "equity_mentioned": False,
-                "tech_stack": [],
-                "urgency_score": 0.0,
-                "confidence": 1.0,
-                "sentiment_score": 0.0,
-                "llm_classified": False,
-            })
+        breaker.force_trip("ANTHROPIC_API_KEY missing")
+        return [_rule_fallback(p) for p in posts]
+
+    # ── Pre-filter ────────────────────────────────────────────────────────
+    results: list[dict[str, Any]] = []
+    to_classify: list[dict[str, Any]] = []
+    for post in posts:
+        rejected = _pre_filter_reject(post)
+        if rejected:
+            results.append(rejected)
         else:
             to_classify.append(post)
 
     logger.info(
         "Pre-filter: %d skipped, %d sent to LLM (of %d total).",
-        len(pre_rejected), len(to_classify), len(posts),
+        len(results), len(to_classify), len(posts),
     )
-
-    results: list[dict[str, Any]] = list(pre_rejected)
 
     if not to_classify:
         return results
 
-    futures = {}
-    with ThreadPoolExecutor(max_workers=max_workers) as pool:
-        for post in to_classify:
-            future = pool.submit(classify_post, post)
-            futures[future] = post.get("post_id")
+    # ── LLM fan-out with breaker ─────────────────────────────────────────
+    from concurrent.futures import ThreadPoolExecutor, as_completed
 
-        done = 0
+    client = _get_client()
+    completed = 0
+    fallback_count = 0
+
+    with ThreadPoolExecutor(max_workers=max_workers) as pool:
+        futures = {
+            pool.submit(_llm_classify_one, client, post): post
+            for post in to_classify
+        }
         for future in as_completed(futures):
-            post_id = futures[future]
-            done += 1
+            post = futures[future]
+            completed += 1
+
+            # Already tripped during this run: fall back immediately.
+            if breaker.is_tripped():
+                future.cancel()
+                results.append(_rule_fallback(post))
+                fallback_count += 1
+                continue
+
             try:
                 results.append(future.result())
-                if done % 50 == 0 or done == len(to_classify):
-                    logger.info("LLM classified %d/%d.", done, len(to_classify))
-            except Exception as exc:
-                logger.error("Skipping post %s: %s", post_id, exc)
+                breaker.record_success()
+            except Exception as exc:  # noqa: BLE001
+                logger.error(
+                    "LLM classification failed for %s after retries: %s",
+                    post.get("post_id"), exc,
+                )
+                breaker.record_failure(exc)
+                results.append(_rule_fallback(post))
+                fallback_count += 1
 
-    logger.info("Batch complete: %d/%d processed.", len(results), len(posts))
+            if completed % 50 == 0 or completed == len(to_classify):
+                logger.info(
+                    "Progress: %d/%d (%s) fallback=%d",
+                    completed, len(to_classify), breaker.status_message(),
+                    fallback_count,
+                )
+
+    logger.info(
+        "Batch complete: %d results (fallback=%d). %s",
+        len(results), fallback_count, breaker.status_message(),
+    )
     return results
 
 

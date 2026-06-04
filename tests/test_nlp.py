@@ -1,172 +1,160 @@
-"""Tests for the NLP enrichment module."""
+"""High-precision fallback enrichment tests.
+
+The single most important guarantee: when the LLM is offline and the rule
+fallback runs, no question, advice request, rant, or meta-thread is
+classified as a real hiring or for-hire opportunity.
+"""
 
 import pytest
 
-from src.nlp.enrichment import (
-    classify_domain,
-    classify_is_job,
-    classify_job_type,
-    classify_seniority,
-    classify_work_mode,
-    compute_sentiment,
-    compute_urgency,
-    enrich_post,
-    extract_tech_stack,
-)
+from src.nlp.enrichment import RULE_CONFIDENCE, classify_post_fallback, enrich_post
 
 
-class TestJobClassification:
-    """Tests for job detection classifier."""
+# ---------------------------------------------------------------------------
+# Posts that MUST NOT be classified as hiring / for_hire / gig_freelance.
+# Each entry: (id, title, body, expected_category_or_set)
+# ---------------------------------------------------------------------------
+NEVER_A_JOB = [
+    ("q1", "Should I learn Go or Rust for backend roles?", "Advice please."),
+    ("q2", "What is the best path into ML?", "I want to switch careers."),
+    ("q3", "How do I prepare for the Google interview?", "Got an onsite next week."),
+    ("q4", "Anyone else hate take-home assignments?", "Just venting."),
+    ("q5", "Has anyone worked at a Series A startup?", "Considering an offer."),
+    ("q6", "Should I take the senior offer at 180k or stay?", "Comparing offers."),
+    ("q7", "Am I cooked? 200 applications, 0 callbacks", "Job search update."),
+    ("q8", "?Need help choosing between two Python jobs", "Both look good."),
+    ("rant1", "Rant: I quit my job after a year of being underpaid", "Just frustrated."),
+    ("rant2", "Vent: got laid off this morning", "Anyone hiring?"),
+    ("rant3", "Recruiter ghosted me after the final round", "So pissed."),
+    ("rant4", "Interview experience at Big Co: brutal coding challenge", "Wow."),
+    ("meta1", "[Meta] Weekly hiring thread - October 2026", "Post your jobs."),
+    ("meta2", "Weekly thread: Who's hiring?", "Comment with roles."),
+    ("meta3", "Megathread: salary transparency 2026", "Share comp."),
+    # Body has hiring keyword but title is a question — must stay non-job.
+    ("body1",
+     "Is it worth switching to data engineering?",
+     "We are hiring engineers but I'm asking for advice on if I should pivot."),
+    # Body claims to be hiring but title is rant — must stay non-job.
+    ("body2",
+     "Frustrated with how I got fired",
+     "We're hiring at my old company but I would never recommend them."),
+    # Looks like a job but is a coding-challenge rant.
+    ("ch1",
+     "Take-home coding challenge took me 14 hours, am I cooked?",
+     "Senior Python role at Acme. Why is this so hard?"),
+]
 
-    def test_hiring_post_detected(self):
-        assert classify_is_job("[Hiring] Python Developer Needed", "") is True
-
-    def test_for_hire_post_rejected(self):
-        assert classify_is_job("[For Hire] Developer looking for work", "") is False
-
-    def test_job_opening_detected(self):
-        assert classify_is_job(
-            "Job Opening: Data Analyst",
-            "We are looking for a data analyst to join our team. Apply now.",
-        ) is True
-
-    def test_career_advice_rejected(self):
-        assert classify_is_job(
-            "Should I learn Python or JavaScript?",
-            "I need career advice on which language to learn first.",
-        ) is False
-
-
-class TestJobTypeClassification:
-    """Tests for job type classification."""
-
-    def test_full_time(self):
-        assert classify_job_type("Full-time Software Engineer", "") == "Full-time"
-
-    def test_contract(self):
-        assert classify_job_type("Contract Developer Needed", "") == "Contract"
-
-    def test_freelance(self):
-        assert classify_job_type("Freelance Designer Wanted", "") == "Freelance"
-
-    def test_internship(self):
-        assert classify_job_type("Summer Internship Program", "") == "Internship"
-
-
-class TestSeniorityClassification:
-    """Tests for seniority level classification."""
-
-    def test_junior(self):
-        assert classify_seniority("Junior Developer Position", "") == "Junior"
-
-    def test_senior(self):
-        assert classify_seniority("Senior Engineer", "") == "Senior"
-
-    def test_lead(self):
-        assert classify_seniority("Lead Architect Role", "") == "Lead"
-
-
-class TestDomainClassification:
-    """Tests for domain classification."""
-
-    def test_data(self):
-        assert classify_domain("Data Scientist Position", "") == "Data"
-
-    def test_software(self):
-        assert classify_domain("Software Developer", "") == "Software"
-
-    def test_design(self):
-        assert classify_domain("UX Designer", "") == "Design"
-
-    def test_marketing(self):
-        assert classify_domain("Digital Marketing Manager", "") == "Marketing"
-
-
-class TestWorkModeClassification:
-    """Tests for work mode classification."""
-
-    def test_remote(self):
-        assert classify_work_mode("Remote Python Developer", "") == "Remote"
-
-    def test_onsite(self):
-        assert classify_work_mode("On-site Java Developer", "") == "On-site"
-
-    def test_hybrid(self):
-        assert classify_work_mode("Hybrid work model", "") == "Hybrid"
+# Posts that MUST be recognised as real opportunities by the fallback.
+ARE_JOBS = [
+    ("h1",
+     "[Hiring] Senior Backend Engineer (Python) - Remote - $150-180k",
+     "Acme Analytics is hiring a senior backend engineer. Stack: Python, Postgres, AWS.",
+     "hiring"),
+    ("h2",
+     "We're hiring a Mid-level React Developer in Berlin",
+     "Hybrid 3 days in office. Strong TypeScript experience required.",
+     "hiring"),
+    ("h3",
+     "Now hiring: DevOps Engineer (Remote, Contract)",
+     "Kubernetes, Terraform, AWS. 6-month contract with extension.",
+     "hiring"),
+    ("h4",
+     "Open position: Junior Data Analyst at FinTech startup",
+     "SQL and Tableau required. 1-3 years experience.",
+     "hiring"),
+    ("h5",
+     "Looking to hire freelance UI/UX Designer",
+     "Need a Figma designer for a 2-week dashboard project. Remote.",
+     "hiring"),
+    ("fh1",
+     "[For Hire] Senior Python developer, 8 yrs experience",
+     "I'm available for freelance gigs. Django, FastAPI, AWS. $80/hr.",
+     "for_hire"),
+    ("fh2",
+     "Available for hire — full-stack engineer",
+     "10 years experience. React, Node, Postgres. Open to remote contracts.",
+     "for_hire"),
+    ("g1",
+     "[Gig] Need a logo designer for $200",
+     "Quick one-off project. Adobe Illustrator. 3-day turnaround.",
+     "gig_freelance"),
+]
 
 
-class TestTechStackExtraction:
-    """Tests for technology extraction."""
-
-    def test_extract_python(self):
-        techs = extract_tech_stack("Python Developer", "Experience with Python and Django")
-        assert "Python" in techs
-        assert "Django" in techs
-
-    def test_extract_multiple(self):
-        techs = extract_tech_stack(
-            "Full Stack Developer",
-            "Must know React, Node.js, and AWS",
-        )
-        assert "React" in techs
-        assert "Node.js" in techs
-        assert "AWS" in techs
-
-    def test_no_techs(self):
-        techs = extract_tech_stack("Looking for a manager", "Leadership role")
-        assert len(techs) == 0
+@pytest.mark.parametrize("post_id,title,body", [
+    (pid, title, body) for pid, title, body in NEVER_A_JOB
+])
+def test_never_classifies_question_or_rant_as_job(post_id, title, body):
+    """The single most important guarantee of the fallback."""
+    result = classify_post_fallback(title, body)
+    assert result["is_job"] is False, (
+        f"{post_id!r}: title {title!r} was wrongly classified as a job. "
+        f"Got category={result['post_category']!r}."
+    )
+    assert result["post_category"] not in {"hiring", "for_hire", "gig_freelance"}
 
 
-class TestSentiment:
-    """Tests for sentiment analysis."""
-
-    def test_positive_sentiment(self):
-        score = compute_sentiment("Amazing opportunity!", "Great team, excellent benefits")
-        assert score > 0
-
-    def test_negative_sentiment(self):
-        score = compute_sentiment("Terrible job", "Awful working conditions, bad pay")
-        assert score < 0
-
-
-class TestUrgency:
-    """Tests for urgency scoring."""
-
-    def test_urgent_post(self):
-        score = compute_urgency("URGENT: Need developer ASAP", "Start immediately, deadline today")
-        assert score > 0.3
-
-    def test_non_urgent_post(self):
-        score = compute_urgency("Open position", "We are hiring for our team")
-        assert score < 0.2
+@pytest.mark.parametrize("post_id,title,body,expected_category", [
+    (pid, title, body, cat) for pid, title, body, cat in ARE_JOBS
+])
+def test_recognises_real_opportunities(post_id, title, body, expected_category):
+    result = classify_post_fallback(title, body)
+    assert result["is_job"] is True, (
+        f"{post_id!r}: title {title!r} was wrongly marked non-job. "
+        f"Got category={result['post_category']!r}."
+    )
+    assert result["post_category"] == expected_category
 
 
-class TestEnrichPost:
-    """Tests for the full enrichment pipeline."""
+def test_rule_confidence_is_stamped():
+    """Every fallback row must carry the rule-confidence sentinel so the
+    LLM upgrade task picks it up later."""
+    result = classify_post_fallback(
+        "[Hiring] Backend engineer", "We are hiring. Python, AWS."
+    )
+    assert result["confidence"] == RULE_CONFIDENCE
 
-    def test_enrich_job_post(self):
-        post = {
-            "post_id": "test123",
-            "title": "[Hiring] Senior Python Developer - Remote",
-            "body": "We are looking for a senior Python developer with AWS experience. Apply now!",
-        }
-        result = enrich_post(post)
 
-        assert result["post_id"] == "test123"
-        assert result["is_job"] is True
-        assert result["work_mode"] == "Remote"
-        assert "Python" in result["tech_stack"]
-        assert "sentiment_score" in result
-        assert "urgency_score" in result
+def test_for_hire_focused_sub_skips_length_floor():
+    """`r/forhire` posts are often terse; they must still pass on title tag."""
+    result = classify_post_fallback(
+        "[Hiring] Logo for $50",
+        "Need a logo. DM.",
+        subreddit="forhire",
+    )
+    assert result["is_job"] is True
+    assert result["post_category"] == "hiring"
 
-    def test_enrich_non_job_post(self):
-        post = {
-            "post_id": "test456",
-            "title": "Should I learn React or Angular?",
-            "body": "Career advice needed. Which framework is better for jobs?",
-        }
-        result = enrich_post(post)
 
-        assert result["post_id"] == "test456"
-        assert result["is_job"] is False
-        assert result["tech_stack"] == []
+def test_short_post_without_focused_sub_is_rejected():
+    result = classify_post_fallback(
+        "[Hiring] Designer",
+        "DM me.",
+        subreddit="webdev",
+    )
+    # Title-tag exists but combined length < 80 chars and sub isn't in
+    # for_hire_focused → falls through to 'other'.
+    assert result["is_job"] is False
+
+
+def test_enrich_post_preserves_post_id():
+    out = enrich_post({
+        "post_id": "abc123",
+        "title": "[Hiring] Senior Python Developer - Remote",
+        "body": "Acme is hiring. Python and AWS. Apply via our site.",
+        "subreddit": "PythonJobs",
+    })
+    assert out["post_id"] == "abc123"
+    assert out["is_job"] is True
+    assert "Python" in out["tech_stack"]
+    assert out["work_mode"] == "Remote"
+    assert out["confidence"] == RULE_CONFIDENCE
+
+
+def test_double_negative_signal_demotes_to_discussion():
+    """Even with a hiring tag, posts loaded with rant signals stay non-job."""
+    result = classify_post_fallback(
+        "[Hiring] but applied to 100 jobs, recruiter ghosted, am i cooked",
+        "Honestly just a rant about how my interview experience went.",
+    )
+    assert result["is_job"] is False

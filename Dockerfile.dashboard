@@ -1,14 +1,35 @@
+# syntax=docker/dockerfile:1.6
+
+# ── Stage 1: build the React/Vite SPA ────────────────────────────────────
+FROM node:20-alpine AS frontend
+
+WORKDIR /build
+COPY frontend/package*.json ./
+RUN npm ci --no-audit --no-fund
+
+COPY frontend/ ./
+RUN npm run build
+
+
+# ── Stage 2: backend + static assets ─────────────────────────────────────
 FROM python:3.11-slim
 
 WORKDIR /app
 
-ENV PYTHONUNBUFFERED=1
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONPATH=/app \
+    DASHBOARD_STATIC_DIR=/app/static
 
-COPY requirements.txt /app/requirements.txt
-RUN pip install --no-cache-dir -r /app/requirements.txt
+COPY requirements.txt ./
+RUN pip install --no-cache-dir -r requirements.txt
 
-COPY . /app
+COPY src/ ./src/
+COPY data/schema.sql ./data/schema.sql
+COPY data/schema_postgres.sql ./data/schema_postgres.sql
+COPY data/migrations ./data/migrations
 
-ENV PYTHONPATH="/app"
+COPY --from=frontend /build/dist/ /app/static/
 
-CMD ["streamlit", "run", "src/dashboard/app.py", "--server.port", "8501", "--server.address", "0.0.0.0"]
+EXPOSE 8501
+
+CMD ["uvicorn", "src.api.main:app", "--host", "0.0.0.0", "--port", "8501", "--workers", "2"]

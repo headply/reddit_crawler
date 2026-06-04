@@ -3,7 +3,15 @@
 from typing import Final
 
 # ---------------------------------------------------------------------------
-# Target subreddits — grouped for monitoring + per-group volume overrides
+# Target subreddits — grouped for monitoring + per-group volume overrides.
+#
+# Curated to cover:
+#   * Dedicated job boards (tech + non-tech)
+#   * Active hiring communities per professional domain
+#   * Regional / geo-specific hiring channels (Africa, India, LATAM, Asia, EU)
+#   * Question-leaning communities — these are wrapped with strict include
+#     keyword filters below so only posts with explicit hiring markers slip
+#     into the database (avoids polluting the dataset with advice threads).
 # ---------------------------------------------------------------------------
 SUBREDDIT_GROUPS: Final[dict[str, list[str]]] = {
     "tech_job_boards": [
@@ -20,6 +28,15 @@ SUBREDDIT_GROUPS: Final[dict[str, list[str]]] = {
         "cybersecurityjobs",
         "uxjobs",
         "gamedevjobs",
+        "cscareeropportunities",
+    ],
+    "general_job_boards": [
+        "jobs",
+        "RemoteJobsHub",
+        "RemoteWork",
+        "digitalnomadjobs",
+        "Internships",
+        "EngineeringJobs",
     ],
     "tech_communities": [
         "webdev",
@@ -37,38 +54,71 @@ SUBREDDIT_GROUPS: Final[dict[str, list[str]]] = {
         "rust",
         "golang",
         "javascript",
-        "learnprogramming",
         "ExperiencedDevs",
-        "csMajors",
-        "ITCareerQuestions",
         "sysadmin",
         "aws",
         "kubernetes",
         "datascience",
         "analytics",
+        "BusinessIntelligence",
         "learnmachinelearning",
         "computervision",
         "deeplearning",
         "LLMDevs",
     ],
+    "careers_questions": [
+        # These are noisy advice communities. The strict include filter
+        # below ensures only posts whose title carries an explicit hiring
+        # / for-hire marker make it past the scraper.
+        "learnprogramming",
+        "ITCareerQuestions",
+        "cscareerquestions",
+        "csMajors",
+    ],
     "non_tech": [
         "marketing",
+        "DigitalMarketing",
         "sales",
+        "techsales",
+        "salestechniques",
         "SEO",
         "contentmarketing",
         "digital_marketing",
         "GraphicDesign",
         "web_design",
+        "Design",
+        "ProductDesign",
+        "userexperience",
         "copywriting",
         "writing",
         "freelanceWriters",
         "accounting",
+        "Bookkeeping",
+        "tax",
         "FinanceCareers",
         "ProductManagement",
         "startups",
         "Entrepreneur",
         "smallbusiness",
         "agency",
+    ],
+    "engineering_non_software": [
+        "engineeringjobs",
+        "civilengineering",
+        "MechanicalEngineering",
+        "AerospaceEngineering",
+        "ECE",
+    ],
+    "healthcare": [
+        "medicine",
+        "nursing",
+        "healthcareIT",
+        "medlabprofessionals",
+    ],
+    "ops_people": [
+        "CustomerSuccess",
+        "humanresources",
+        "recruiting",
     ],
     "geo_africa": [
         "nigeria",
@@ -89,7 +139,6 @@ SUBREDDIT_GROUPS: Final[dict[str, list[str]]] = {
     ],
     "remote_specific": [
         "remotework",
-        "WorkOnline",
         "beermoney",
         "juststart",
         "slavelabour",
@@ -104,20 +153,34 @@ SUBREDDIT_GROUPS: Final[dict[str, list[str]]] = {
         "HireanArtist",
         "HireanEditor",
         "freelanceWriters",
+        "gameDevClassifieds",
     ],
 }
 
 _TARGETS: list[str] = [s for group in SUBREDDIT_GROUPS.values() for s in group]
 TARGET_SUBREDDITS: Final[list[str]] = list(dict.fromkeys(_TARGETS))
 
-# Number of posts to fetch per subreddit per run
-POSTS_PER_SUBREDDIT: Final[int] = 50
+# ---------------------------------------------------------------------------
+# Volume settings — bumped to fetch as much as PRAW comfortably allows.
+# PRAW caps listing endpoints at 1000 posts and 60 req/min. With ~95
+# subreddits at limit=200 (~2 reqs each), we use ~190 req per run and
+# finish in ~3 minutes wall-clock — well within Reddit's limits.
+# ---------------------------------------------------------------------------
+POSTS_PER_SUBREDDIT: Final[int] = 200
 
 POSTS_PER_GROUP: Final[dict[str, int]] = {
-    "for_hire_focused": 100,
-    "geo_africa": 25,
-    "geo_india": 25,
-    "geo_emerging": 25,
+    "for_hire_focused": 400,
+    "tech_job_boards": 250,
+    "general_job_boards": 250,
+    "remote_specific": 200,
+    "non_tech": 150,
+    "geo_africa": 75,
+    "geo_india": 75,
+    "geo_emerging": 75,
+    "careers_questions": 100,
+    "engineering_non_software": 100,
+    "healthcare": 100,
+    "ops_people": 100,
 }
 
 SUBREDDIT_TO_GROUP: Final[dict[str, str]] = {
@@ -126,11 +189,48 @@ SUBREDDIT_TO_GROUP: Final[dict[str, str]] = {
     for subreddit in subs
 }
 
+# ---------------------------------------------------------------------------
+# Per-subreddit include filters — applied BEFORE insert so noise channels
+# only contribute posts whose title/body contains an explicit hiring marker.
+# This prevents r/learnprogramming question threads from being scraped and
+# then having to be filtered downstream.
+# ---------------------------------------------------------------------------
+_HIRING_INCLUDE_KEYWORDS: Final[list[str]] = [
+    "[hiring]", "[for hire]", "[gig]", "[task]",
+    "hiring", "for hire", "available for hire", "looking to hire",
+    "we're hiring", "we are hiring", "now hiring", "open role",
+    "open position", "open positions", "job opening", "freelance",
+    "contract", "gig", "looking for clients", "open to work",
+]
+
+_NOISY_SUBS = (
+    # noisy generalist subs — require explicit hiring marker
+    "beermoney", "slavelabour", "juststart",
+    # question communities
+    "learnprogramming", "ITCareerQuestions", "cscareerquestions", "csMajors",
+    # broader tech subs where hiring is rare but legit when it happens
+    "rust", "golang", "javascript", "ExperiencedDevs", "sysadmin",
+    "aws", "kubernetes", "datascience", "analytics",
+    "learnmachinelearning", "computervision", "deeplearning", "LLMDevs",
+    "BusinessIntelligence",
+    # healthcare / engineering / ops — communities where most posts aren't jobs
+    "medicine", "nursing", "healthcareIT", "medlabprofessionals",
+    "civilengineering", "MechanicalEngineering", "AerospaceEngineering", "ECE",
+    "engineeringjobs",
+    "humanresources", "recruiting", "CustomerSuccess",
+    "sales", "salestechniques", "marketing", "SEO", "contentmarketing",
+    "digital_marketing", "DigitalMarketing",
+    "Design", "userexperience", "ProductDesign", "GraphicDesign", "web_design",
+    "writing", "copywriting",
+    "accounting", "Bookkeeping", "tax", "FinanceCareers",
+    "ProductManagement", "startups", "Entrepreneur", "smallbusiness", "agency",
+    # geo subs — most posts are local discussion, only keep ones with hiring tags
+    "nigeria", "lagos", "kenya", "southafrica", "AfricanTech",
+    "brazil", "latam", "philippines",
+)
+
 SUBREDDIT_INCLUDE_KEYWORDS: Final[dict[str, list[str]]] = {
-    "beermoney": [
-        "hiring", "job", "contract", "freelance", "gig",
-        "task", "project", "remote", "part-time",
-    ]
+    sub.lower(): list(_HIRING_INCLUDE_KEYWORDS) for sub in _NOISY_SUBS
 }
 
 # ---------------------------------------------------------------------------
@@ -195,6 +295,19 @@ DOMAIN_PATTERNS: Final[dict[str, list[str]]] = {
         "trading systems", "banking software", "payments engineer",
         "accounting", "bookkeeper", "controller", "cpa",
     ],
+    "Healthcare": [
+        "nurse", "registered nurse", "rn ", "lpn", "medical assistant",
+        "physician", "clinical", "healthcare it", "epic analyst", "ehr",
+        "lab technician", "phlebotomist",
+    ],
+    "Customer Success": [
+        "customer success", "customer support", "support engineer", "csm ",
+        "account support", "client success",
+    ],
+    "HR & Recruiting": [
+        "recruiter", "talent acquisition", "hr generalist", "people ops",
+        "people operations", "talent partner",
+    ],
 }
 
 # ---------------------------------------------------------------------------
@@ -241,10 +354,17 @@ JOB_POSITIVE_PATTERNS: Final[list[str]] = [
 ]
 
 JOB_NEGATIVE_PATTERNS: Final[list[str]] = [
+    # job-seeking / advice
     "looking for work", "need a job", "hire me", "[for hire]",
     "resume review", "career advice", "interview tips",
     "should i", "is it worth", "what should", "how do i",
+    # rants
     "rant", "vent", "frustrated", "quit my job", "meme", "joke",
+    # interview / offer talk (rarely a job post itself)
+    "applied to", "rejected", "ghosted", "recruiter ghosted",
+    "take-home", "coding challenge", "whiteboard", "interview experience",
+    "am i cooked", "should i accept", "should i take", "which offer",
+    "comparing offers", "salary negotiation", "lowball", "counter offer",
 ]
 
 # ---------------------------------------------------------------------------

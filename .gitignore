@@ -15,6 +15,8 @@ env/
 
 # Environment variables
 .env
+.env.local
+.env.*.local
 
 # Database
 *.db
@@ -38,8 +40,34 @@ Thumbs.db
 # Coverage & Testing
 htmlcov/
 .coverage
+.coverage.*
 .pytest_cache/
+.mypy_cache/
+.ruff_cache/
 tests/__pycache__/
 
-# Streamlit
-.streamlit/secrets.toml
+# Airflow runtime state (the container writes logs here)
+airflow/logs/
+!airflow/logs/.gitkeep
+
+# Dashboard-served static assets — built by the multi-stage Docker image,
+# and sometimes locally for smoke tests; never check in build artefacts.
+/static/
+frontend/dist/
+frontend/node_modules/
+frontend/.vite/
+frontend/tsconfig.tsbuildinfo
+
+# Node misc
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Stale Streamlit config (project no longer uses Streamlit)
+.streamlit/
+
+# Claude / agent metadata
+.claude/
+
+# Stray pip-install artefacts (e.g. files literally named "=0.40.0")
+=*

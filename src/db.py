@@ -1,13 +1,8 @@
-"""Database connection and operations for PostgreSQL (Supabase).
+"""Database connection and operations for PostgreSQL (production) / SQLite (local).
 
-Handles PostgreSQL connections via psycopg2 and common database operations.
-Falls back to SQLite for local development if DATABASE_URL starts with 'sqlite'.
-
-Supports configuration via:
-  1. Streamlit secrets (st.secrets["DATABASE_URL"]) — for Streamlit Cloud
-  2. Environment variables (os.getenv) — for GitHub Actions / containers
-  3. .env file (python-dotenv) — for local development
-  4. Default: SQLite at data/reddit_jobs.db
+Configuration order:
+  1. ``DATABASE_URL`` environment variable (loaded from `.env` via python-dotenv).
+  2. Default: SQLite at ``data/reddit_jobs.db``.
 """
 
 import logging
@@ -26,34 +21,11 @@ SCHEMA_PATH: Path = Path(__file__).resolve().parent.parent / "data" / "schema.sq
 
 
 def _resolve_database_url() -> str:
-    """Resolve the database URL from available configuration sources.
-
-    Priority:
-        1. Streamlit secrets (st.secrets)
-        2. OS environment variable
-        3. Default SQLite path
-
-    Returns:
-        Database connection URL string.
-    """
-    # 1. Try Streamlit secrets first (works on Streamlit Cloud)
-    try:
-        import streamlit as st
-
-        url = st.secrets.get("DATABASE_URL")
-        if url:
-            logger.info("DATABASE_URL loaded from Streamlit secrets.")
-            return url
-    except (ImportError, AttributeError, FileNotFoundError):
-        pass
-
-    # 2. Fall back to OS environment variable (.env already loaded above)
+    """Read DATABASE_URL from env, falling back to local SQLite."""
     url = os.getenv("DATABASE_URL")
     if url:
-        logger.info("DATABASE_URL loaded from environment variable.")
+        logger.info("DATABASE_URL loaded from environment.")
         return url
-
-    # 3. Default to local SQLite
     logger.info("No DATABASE_URL found; defaulting to local SQLite.")
     return _DEFAULT_DB_URL
 

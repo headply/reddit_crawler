@@ -103,8 +103,7 @@ class TestClassifyScam:
         mock_client = MagicMock()
         mock_client.messages.create.return_value = mock_response
 
-        with patch("src.nlp.scam_detector._get_client", return_value=mock_client):
-            result = _classify_scam(post)
+        result = _classify_scam(mock_client, post)
 
         assert result["is_scam"] is True
         assert len(result["reasons"]) == 2
@@ -125,8 +124,7 @@ class TestClassifyScam:
         mock_client = MagicMock()
         mock_client.messages.create.return_value = mock_response
 
-        with patch("src.nlp.scam_detector._get_client", return_value=mock_client):
-            result = _classify_scam(post)
+        result = _classify_scam(mock_client, post)
 
         assert result["is_scam"] is True
 
@@ -144,8 +142,7 @@ class TestClassifyScam:
         mock_client = MagicMock()
         mock_client.messages.create.return_value = mock_response
 
-        with patch("src.nlp.scam_detector._get_client", return_value=mock_client):
-            result = _classify_scam(post)
+        result = _classify_scam(mock_client, post)
 
         assert result["is_scam"] is True
 
@@ -163,8 +160,7 @@ class TestClassifyScam:
         mock_client = MagicMock()
         mock_client.messages.create.return_value = mock_response
 
-        with patch("src.nlp.scam_detector._get_client", return_value=mock_client):
-            result = _classify_scam(post)
+        result = _classify_scam(mock_client, post)
 
         assert result["is_scam"] is False
         assert result["post_id"] == "legit1"
@@ -183,8 +179,7 @@ class TestClassifyScam:
         mock_client = MagicMock()
         mock_client.messages.create.return_value = mock_response
 
-        with patch("src.nlp.scam_detector._get_client", return_value=mock_client):
-            result = _classify_scam(post)
+        result = _classify_scam(mock_client, post)
 
         assert result["is_scam"] is False
 
@@ -203,8 +198,7 @@ class TestClassifyScam:
         mock_client = MagicMock()
         mock_client.messages.create.return_value = mock_response
 
-        with patch("src.nlp.scam_detector._get_client", return_value=mock_client):
-            result = _classify_scam(post)
+        result = _classify_scam(mock_client, post)
 
         assert result["is_scam"] is False
 
@@ -217,7 +211,9 @@ class TestFlagScams:
     def test_skips_when_no_api_key(self, monkeypatch):
         monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
         result = flag_scams()
-        assert result == {"scanned": 0, "flagged": 0}
+        assert result["scanned"] == 0
+        assert result["flagged"] == 0
+        assert result.get("tripped") is True
 
     def test_processes_unscanned_posts(self, monkeypatch):
         monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")

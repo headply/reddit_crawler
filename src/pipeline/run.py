@@ -1,9 +1,15 @@
 """Pipeline orchestrator for the Reddit Job Intelligence Platform.
 
-Coordinates scraping, LLM classification, and database storage.
-Uses GPT-4o-mini as the primary classifier. Falls back to rule-based
-enrichment if OPENAI_API_KEY is not set.
+Coordinates scraping, classification (LLM with high-precision rule
+fallback), scam detection, view refresh, and raw cleanup.
+
+The classification path is now resilient: a per-run circuit breaker
+(``LLMCircuitBreaker``) short-circuits to ``src.nlp.enrichment.enrich_post``
+once the LLM is clearly unresponsive. No step can crash the whole run —
+every helper is wrapped in try/except and returns a sensible default.
 """
+
+from __future__ import annotations
 
 import logging
 import sys
@@ -13,11 +19,13 @@ from typing import Any
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
 from src.db import (
+    _placeholder,
     execute_query,
     init_db,
     insert_classification,
     insert_tech_stack,
 )
+from src.nlp.circuit_breaker import LLMCircuitBreaker
 from src.scrape.reddit_scraper import scrape_all
 
 logging.basicConfig(
@@ -28,8 +36,11 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+# ---------------------------------------------------------------------------
+# Queries
+# ---------------------------------------------------------------------------
 def get_unprocessed_posts() -> list[dict[str, Any]]:
-    """Fetch posts that have not yet been classified."""
+    """Posts that have no classification row yet."""
     rows = execute_query(
         """SELECT p.post_id, p.title, p.body, p.subreddit
            FROM posts p
@@ -40,66 +51,140 @@ def get_unprocessed_posts() -> list[dict[str, Any]]:
     return [dict(row) for row in rows]
 
 
-def enrich_and_store(posts: list[dict[str, Any]], max_workers: int = 10) -> int:
-    """Classify posts and store results. Uses LLM sieve when available.
+def get_rule_classified_for_upgrade(limit: int) -> list[dict[str, Any]]:
+    """Rows previously written by the rule fallback that are worth retrying
+    with the LLM.
 
-    Args:
-        posts: List of unclassified post dicts.
-        max_workers: Parallel API calls for the LLM classifier.
-
-    Returns:
-        Number of posts successfully classified and stored.
+    Skips pre-rejected categories so we don't burn tokens on advice/rant.
     """
-    from src.nlp.llm_sieve import classify_posts_batch, openai_available
+    ph = _placeholder()
+    rows = execute_query(
+        f"""SELECT p.post_id, p.title, p.body, p.subreddit
+           FROM posts p
+           JOIN job_classifications jc ON p.post_id = jc.post_id
+           WHERE jc.llm_classified = FALSE
+             AND COALESCE(jc.post_category, '') NOT IN
+                 ('other','discussion','advice_request','rant','meme')
+           ORDER BY p.created_utc DESC
+           LIMIT {ph}""",
+        (limit,),
+        fetch=True,
+    )
+    return [dict(row) for row in rows]
 
-    if not posts:
-        return 0
 
-    if openai_available():
-        logger.info("Anthropic key detected — using LLM classifier.")
-        results = classify_posts_batch(posts, max_workers=max_workers)
-    else:
-        logger.warning(
-            "ANTHROPIC_API_KEY not set — falling back to rule-based enrichment."
+# ---------------------------------------------------------------------------
+# Storage helpers
+# ---------------------------------------------------------------------------
+def _persist(result: dict[str, Any]) -> bool:
+    """Write a single classification + its tech stack. Swallow errors."""
+    try:
+        post_category = result.get("post_category")
+        if post_category is None:
+            post_category = "hiring" if result.get("is_job") else "other"
+        result["post_category"] = post_category
+        result["is_job"] = post_category in {"hiring", "for_hire", "gig_freelance"}
+
+        tech_stack = result.pop("tech_stack", []) or []
+        insert_classification(result)
+        if tech_stack:
+            insert_tech_stack(result["post_id"], tech_stack)
+        return True
+    except Exception as exc:  # noqa: BLE001
+        logger.error(
+            "Failed to store classification for %s: %s",
+            result.get("post_id"), exc,
         )
-        from src.nlp.enrichment import enrich_post
+        return False
+
+
+# ---------------------------------------------------------------------------
+# Classification entry points used by the DAG
+# ---------------------------------------------------------------------------
+def enrich_and_store(
+    posts: list[dict[str, Any]],
+    max_workers: int = 10,
+    breaker: LLMCircuitBreaker | None = None,
+) -> dict[str, int]:
+    """Classify ``posts`` and persist. Never raises.
+
+    Returns counts ``{stored, llm_classified, rule_fallback, tripped}``.
+    """
+    if not posts:
+        return {"stored": 0, "llm_classified": 0, "rule_fallback": 0, "tripped": False}
+
+    from src.nlp.llm_sieve import classify_posts_batch
+
+    breaker = breaker or LLMCircuitBreaker(threshold=5, name="classify")
+    try:
+        results = classify_posts_batch(posts, max_workers=max_workers, breaker=breaker)
+    except Exception as exc:  # noqa: BLE001
+        # classify_posts_batch is documented to never raise, but be defensive.
+        logger.exception("Unexpected error in classify_posts_batch: %s", exc)
+        breaker.force_trip(f"unexpected: {exc}")
+        from src.nlp.enrichment import enrich_post as rule_enrich
         results = []
         for post in posts:
             try:
-                results.append(enrich_post(post))
-            except Exception as exc:
-                logger.error("Rule-based enrichment failed for %s: %s", post.get("post_id"), exc)
+                r = rule_enrich(post)
+                r["llm_classified"] = False
+                results.append(r)
+            except Exception as inner:  # noqa: BLE001
+                logger.error("Rule fallback failed for %s: %s", post.get("post_id"), inner)
 
-    stored = 0
-    llm = openai_available()  # True when ANTHROPIC_API_KEY is set
-    for result in results:
-        try:
-            post_category = result.get("post_category")
-            if post_category is None:
-                post_category = "hiring" if result.get("is_job") else "other"
-            result["post_category"] = post_category
-            result["is_job"] = post_category in {"hiring", "for_hire", "gig_freelance"}
-
-            tech_stack = result.pop("tech_stack", [])
-            insert_classification({**result, "llm_classified": llm})
-            if tech_stack:
-                insert_tech_stack(result["post_id"], tech_stack)
-            stored += 1
-        except Exception as exc:
-            logger.error("Failed to store classification for %s: %s", result.get("post_id"), exc)
-
-    return stored
+    stored = sum(1 for r in results if _persist(r))
+    llm_n = sum(1 for r in results if r.get("llm_classified"))
+    rule_n = stored - llm_n
+    logger.info(
+        "enrich_and_store: stored=%d llm=%d rule=%d (%s)",
+        stored, llm_n, rule_n, breaker.status_message(),
+    )
+    return {
+        "stored": stored,
+        "llm_classified": llm_n,
+        "rule_fallback": rule_n,
+        "tripped": breaker.is_tripped(),
+    }
 
 
-def run_pipeline(skip_scrape: bool = False) -> dict[str, int]:
-    """Execute the full pipeline: scrape, classify, store.
+def reclassify_pending(
+    limit: int,
+    max_workers: int = 10,
+) -> dict[str, int]:
+    """Re-run the LLM on previously rule-classified rows.
 
-    Args:
-        skip_scrape: If True, skip scraping and only classify existing posts.
-
-    Returns:
-        Dict with counts: scraped, classified.
+    No-op (and returns zeros) when the LLM is unavailable or the breaker
+    trips on entry. Safe to call every DAG run.
     """
+    from src.nlp.llm_sieve import openai_available
+
+    if not openai_available():
+        logger.info("reclassify_pending: LLM unavailable; no-op.")
+        return {"candidates": 0, "upgraded": 0}
+
+    try:
+        candidates = get_rule_classified_for_upgrade(limit)
+    except Exception as exc:  # noqa: BLE001
+        logger.error("reclassify_pending: failed to query candidates: %s", exc)
+        return {"candidates": 0, "upgraded": 0, "error": str(exc)}
+
+    if not candidates:
+        return {"candidates": 0, "upgraded": 0}
+
+    logger.info("reclassify_pending: upgrading %d rows with LLM", len(candidates))
+    breaker = LLMCircuitBreaker(threshold=5, name="reclassify")
+    result = enrich_and_store(candidates, max_workers=max_workers, breaker=breaker)
+    return {
+        "candidates": len(candidates),
+        "upgraded": result["llm_classified"],
+        "tripped": result["tripped"],
+    }
+
+
+# ---------------------------------------------------------------------------
+# Standalone runner (kept for manual / cron use; Airflow uses tasks below)
+# ---------------------------------------------------------------------------
+def run_pipeline(skip_scrape: bool = False) -> dict[str, int]:
     logger.info("=" * 60)
     logger.info("Reddit Job Intelligence Pipeline - Starting")
     logger.info("=" * 60)
@@ -109,60 +194,60 @@ def run_pipeline(skip_scrape: bool = False) -> dict[str, int]:
     scraped_count = 0
     if not skip_scrape:
         logger.info("Step 1: Scraping Reddit...")
-        new_posts = scrape_all()
-        scraped_count = len(new_posts)
+        try:
+            new_posts = scrape_all()
+            scraped_count = len(new_posts)
+        except Exception as exc:  # noqa: BLE001
+            logger.error("Scrape step failed: %s", exc)
         logger.info("Scraped %d new posts.", scraped_count)
-    else:
-        logger.info("Step 1: Skipping scrape.")
 
     logger.info("Step 2: Running deduplication...")
     try:
         from src.dedupe import run_dedup
-
         run_dedup()
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001
         logger.error("Deduplication failed: %s", exc)
 
     logger.info("Step 3: Classifying unprocessed posts...")
-    unprocessed = get_unprocessed_posts()
-    logger.info("Found %d unprocessed posts.", len(unprocessed))
+    try:
+        unprocessed = get_unprocessed_posts()
+        logger.info("Found %d unprocessed posts.", len(unprocessed))
+        enrich_and_store(unprocessed)
+    except Exception as exc:  # noqa: BLE001
+        logger.error("Classification step failed: %s", exc)
 
-    classified_count = enrich_and_store(unprocessed)
-    logger.info("Classified %d posts.", classified_count)
+    logger.info("Step 3b: Reclassifying rule-fallback rows with LLM...")
+    try:
+        reclassify_pending(limit=300)
+    except Exception as exc:  # noqa: BLE001
+        logger.error("Reclassify step failed: %s", exc)
 
     logger.info("Step 4: Scam detection...")
     try:
         from src.nlp.scam_detector import flag_scams
-
         flag_scams()
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001
         logger.error("Scam detection failed: %s", exc)
 
     logger.info("Step 5: Refreshing analytics views...")
     try:
         from src.db import refresh_views
-
         refresh_views()
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001
         logger.error("View refresh failed: %s", exc)
 
     logger.info("Step 6: Cleaning up old raw data...")
     try:
         from src.db import cleanup_old_raw
-
         cleanup_old_raw()
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001
         logger.error("Raw cleanup failed: %s", exc)
 
     logger.info("=" * 60)
-    logger.info(
-        "Pipeline complete - scraped: %d, classified: %d",
-        scraped_count,
-        classified_count,
-    )
+    logger.info("Pipeline complete - scraped: %d", scraped_count)
     logger.info("=" * 60)
 
-    return {"scraped": scraped_count, "classified": classified_count}
+    return {"scraped": scraped_count}
 
 
 if __name__ == "__main__":

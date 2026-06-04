@@ -5,16 +5,13 @@ python-dotenv>=1.0.0
 # LLM classification
 anthropic>=0.40.0
 
-# NLP (fallback enrichment)
-textblob>=0.18.0
-
 # Database
 psycopg2-binary>=2.9.9
 
-# Dashboard
-streamlit>=1.38.0
-plotly>=5.18.0
-pandas>=2.1.0
+# API + dashboard backend
+fastapi>=0.115.0
+uvicorn[standard]>=0.32.0
+pydantic>=2.7.0
 
 # Testing
 pytest>=7.4.0
