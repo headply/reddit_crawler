@@ -13,6 +13,7 @@ const Ctx = createContext<FilterContextValue | null>(null);
 
 const CSV_KEYS: (keyof FilterState)[] = [
   "domain", "job_type", "seniority", "work_mode", "tech", "subreddit",
+  "categories",
 ];
 
 function parseFromSearch(sp: URLSearchParams): FilterState {

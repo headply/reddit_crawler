@@ -2,6 +2,7 @@ import { Briefcase, Menu } from "lucide-react";
 import { NavLink } from "react-router-dom";
 import { useMeta } from "@/api/hooks";
 import { formatNumber, timeAgo } from "@/lib/format";
+import { CategoryToggle } from "./CategoryToggle";
 
 const TABS = [
   { to: "/", label: "Browse" },
@@ -34,6 +35,10 @@ export function TopBar({ onToggleSidebar }: { onToggleSidebar: () => void }) {
               Daily job listings from Reddit communities
             </div>
           </div>
+        </div>
+
+        <div className="hidden md:flex ml-3">
+          <CategoryToggle />
         </div>
 
         <nav className="ml-auto flex items-center gap-1 overflow-x-auto">

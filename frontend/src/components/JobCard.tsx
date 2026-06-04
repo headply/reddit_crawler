@@ -3,6 +3,7 @@ import {
   AlertTriangle,
   Clock,
   DollarSign,
+  ExternalLink,
   Flame,
   MessageCircle,
   ThumbsUp,
@@ -92,7 +93,7 @@ export function JobCard({ job }: { job: Job }) {
       )}
 
       {job.tech_stack.length > 0 && (
-        <div className="flex flex-wrap gap-1">
+        <div className="flex flex-wrap gap-1 mb-3">
           {job.tech_stack.slice(0, 12).map((t) => (
             <span
               key={t}
@@ -103,6 +104,23 @@ export function JobCard({ job }: { job: Job }) {
           ))}
         </div>
       )}
+
+      <div className="flex items-center justify-between pt-2 border-t border-line">
+        <a
+          href={job.post_url}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="inline-flex items-center gap-1.5 text-[12px] font-semibold text-accent hover:text-primary"
+        >
+          <ExternalLink size={12} />
+          View on Reddit
+        </a>
+        <span className="text-[11px] text-soft">
+          {job.post_category === "for_hire" ? "Self-pitch" : null}
+          {job.post_category === "gig_freelance" ? "Gig" : null}
+          {job.post_category === "hiring" ? "Hiring" : null}
+        </span>
+      </div>
     </article>
   );
 }

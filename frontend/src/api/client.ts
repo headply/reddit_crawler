@@ -25,6 +25,7 @@ export function filtersToQuery(filters: FilterState, extra: Record<string, strin
     work_mode: filters.work_mode,
     tech: filters.tech,
     subreddit: filters.subreddit,
+    categories: filters.categories,
     date_range: filters.date_range,
     exclude_scams: filters.exclude_scams,
     min_confidence: filters.min_confidence > 0 ? filters.min_confidence : undefined,

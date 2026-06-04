@@ -140,22 +140,69 @@ def _jaccard(tokens_a: list[str], tokens_b: list[str]) -> float:
 
 
 def _near_dedupe_sql(conn) -> list[tuple[str, str]]:
-    """Fetch near-duplicate pairs using pg_trgm similarity."""
+    """Fetch near-duplicate pairs using pg_trgm similarity.
+
+    Strategy that scales to 10k+ recent posts:
+      1. Build a temp table with only the candidate rows (last 7 days,
+         unique, title_tokens long enough to be meaningful). Bucket by
+         subreddit so we only compare within-subreddit — cross-subreddit
+         dupes are vanishingly rare and the full N² self-join across
+         everything blows past the Postgres statement timeout.
+      2. Use ``set_limit`` + ``%`` trigram operator so the GIN index on
+         ``title_tokens`` is used; raw ``similarity(...) >= 0.85`` does
+         NOT use the index.
+      3. Skip subreddits with > 2000 recent candidates as a safety valve
+         (those are noise communities where exact-hash already caught the
+         real reposts).
+    """
     cursor = conn.cursor()
+
+    # Lower the similarity threshold so % uses the GIN index efficiently.
+    cursor.execute("SELECT set_limit(0.85)")
+
+    cursor.execute("""
+        CREATE TEMP TABLE IF NOT EXISTS _dedup_candidates (
+            post_id TEXT PRIMARY KEY,
+            subreddit TEXT NOT NULL,
+            title_tokens TEXT NOT NULL,
+            tlen INT NOT NULL
+        ) ON COMMIT DROP
+    """)
+    cursor.execute("TRUNCATE _dedup_candidates")
+    cursor.execute("""
+        INSERT INTO _dedup_candidates (post_id, subreddit, title_tokens, tlen)
+        SELECT post_id, subreddit, title_tokens, length(title_tokens)
+        FROM posts
+        WHERE created_utc >= NOW() - INTERVAL '7 days'
+          AND COALESCE(dedup_status, 'unique') = 'unique'
+          AND title_tokens IS NOT NULL
+          AND length(title_tokens) >= 12
+    """)
+    cursor.execute("CREATE INDEX ON _dedup_candidates (subreddit)")
     cursor.execute(
-        """SELECT p1.post_id, p2.post_id
-           FROM posts p1
-           JOIN posts p2 ON p1.post_id < p2.post_id
-           WHERE p1.created_utc >= NOW() - INTERVAL '7 days'
-             AND p2.created_utc >= NOW() - INTERVAL '7 days'
-             AND COALESCE(p1.dedup_status, 'unique') = 'unique'
-             AND COALESCE(p2.dedup_status, 'unique') = 'unique'
-             AND p1.title_tokens IS NOT NULL
-             AND p2.title_tokens IS NOT NULL
-             AND similarity(p1.title_tokens, p2.title_tokens) >= 0.85
-             AND abs(length(p1.title_tokens) - length(p2.title_tokens))
-                 <= 0.3 * greatest(length(p1.title_tokens), length(p2.title_tokens))"""
+        "CREATE INDEX ON _dedup_candidates USING gin (title_tokens gin_trgm_ops)"
     )
+
+    # Drop subreddits whose candidate count would blow up the self-join.
+    cursor.execute("""
+        DELETE FROM _dedup_candidates c
+         USING (
+            SELECT subreddit FROM _dedup_candidates
+            GROUP BY subreddit HAVING COUNT(*) > 2000
+         ) noisy
+        WHERE c.subreddit = noisy.subreddit
+    """)
+
+    cursor.execute("""
+        SELECT p1.post_id, p2.post_id
+        FROM _dedup_candidates p1
+        JOIN _dedup_candidates p2
+          ON p1.subreddit = p2.subreddit
+         AND p1.post_id  <  p2.post_id
+         AND p1.title_tokens % p2.title_tokens
+         AND abs(p1.tlen - p2.tlen) <= 0.3 * greatest(p1.tlen, p2.tlen)
+        LIMIT 50000
+    """)
     return cursor.fetchall()
 
 

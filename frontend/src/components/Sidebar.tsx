@@ -3,6 +3,7 @@ import { ChevronDown, RefreshCw, RotateCcw, Search } from "lucide-react";
 import { useFilters } from "@/api/hooks";
 import type { DateRange, FilterState } from "@/api/types";
 import { useFilterState } from "@/state/filters";
+import { CategoryToggle } from "./CategoryToggle";
 
 const DATE_OPTIONS: { value: DateRange; label: string }[] = [
   { value: "today", label: "Today" },
@@ -27,6 +28,12 @@ export function Sidebar({ onRefresh }: { onRefresh?: () => void }) {
       </div>
 
       <div className="lg:px-4 lg:py-3 space-y-4">
+        {/* Show on mobile only — desktop has it in the top bar */}
+        <div className="md:hidden">
+          <Label>Show</Label>
+          <CategoryToggle />
+        </div>
+
         {/* Date range */}
         <div>
           <Label>Time range</Label>

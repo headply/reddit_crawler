@@ -107,6 +107,8 @@ export interface SubredditHealthResponse {
 
 export type DateRange = "today" | "7d" | "30d" | "90d" | "all";
 
+export type PostCategory = "hiring" | "for_hire" | "gig_freelance";
+
 export interface FilterState {
   search: string;
   domain: string[];
@@ -115,10 +117,15 @@ export interface FilterState {
   work_mode: string[];
   tech: string[];
   subreddit: string[];
+  categories: PostCategory[];
   date_range: DateRange;
   exclude_scams: boolean;
   min_confidence: number;
 }
+
+// Default: hiring + gigs (excludes "for hire" self-pitches). Users can
+// add for_hire from the top bar.
+export const DEFAULT_CATEGORIES: PostCategory[] = ["hiring", "gig_freelance"];
 
 export const EMPTY_FILTERS: FilterState = {
   search: "",
@@ -128,6 +135,7 @@ export const EMPTY_FILTERS: FilterState = {
   work_mode: [],
   tech: [],
   subreddit: [],
+  categories: DEFAULT_CATEGORIES,
   date_range: "30d",
   exclude_scams: true,
   min_confidence: 0,
