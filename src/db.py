@@ -7,6 +7,8 @@ Configuration order:
 
 import logging
 import os
+import threading
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Optional
 
@@ -18,6 +20,17 @@ logger = logging.getLogger(__name__)
 
 _DEFAULT_DB_URL = "sqlite:///data/reddit_jobs.db"
 SCHEMA_PATH: Path = Path(__file__).resolve().parent.parent / "data" / "schema.sql"
+
+# Connection pool sizing for the read path (dashboard API). A single page load
+# fans out to ~30 queries; without pooling each opened a fresh Supabase pooler
+# connection, and under concurrent DAG load the pooler hit its cap and the
+# dashboard intermittently failed to load. The pool caps our footprint to a
+# small fixed set of reused connections.
+# NOTE: this pool is per-process. The dashboard runs 2 uvicorn workers, so the
+# dashboard's total connection footprint is 2 x _POOL_MAX. Keep the product
+# (plus the DAG's handful of connections) under the Supabase pooler budget.
+_POOL_MIN = int(os.getenv("DB_POOL_MIN", "1"))
+_POOL_MAX = int(os.getenv("DB_POOL_MAX", "5"))
 
 
 def _resolve_database_url() -> str:
@@ -184,12 +197,79 @@ def _apply_sqlite_v2_migrations(conn) -> None:
     )
 
 
+# ---------------------------------------------------------------------------
+# Read-path connection pool (PostgreSQL only)
+# ---------------------------------------------------------------------------
+_pool = None
+_pool_lock = threading.Lock()
+
+
+def _get_pool():
+    """Lazily create and return the process-wide ThreadedConnectionPool.
+
+    Built on first use (not at import) so SQLite/local dev and tests never
+    construct a Postgres pool. Thread-safe.
+    """
+    global _pool
+    if _pool is not None:
+        return _pool
+    with _pool_lock:
+        if _pool is None:
+            import psycopg2.pool
+
+            _pool = psycopg2.pool.ThreadedConnectionPool(
+                _POOL_MIN,
+                _POOL_MAX,
+                dsn=DATABASE_URL,
+                connect_timeout=10,
+                keepalives=1,
+                keepalives_idle=30,
+                keepalives_interval=10,
+                keepalives_count=3,
+                options="-c statement_timeout=30000",
+            )
+            logger.info("DB connection pool initialised (min=%d max=%d).", _POOL_MIN, _POOL_MAX)
+    return _pool
+
+
+@contextmanager
+def _pooled_connection():
+    """Yield a pooled PostgreSQL connection, returning it to the pool on exit.
+
+    Falls back to a plain ``get_connection()`` (no pool) for SQLite. On a
+    broken connection the conn is discarded from the pool rather than reused.
+    """
+    if not _is_postgres():
+        conn = get_connection()
+        try:
+            yield conn
+        finally:
+            conn.close()
+        return
+
+    pool = _get_pool()
+    conn = pool.getconn()
+    broken = False
+    try:
+        yield conn
+    except Exception:
+        broken = True
+        raise
+    finally:
+        # Discard poisoned connections so the pool never hands back a dead one.
+        pool.putconn(conn, close=broken)
+
+
 def execute_query(
     query: str,
     params: Optional[tuple[Any, ...]] = None,
     fetch: bool = False,
 ) -> list:
     """Execute a SQL query and optionally fetch results.
+
+    Uses the read-path connection pool on PostgreSQL so the dashboard's many
+    per-page queries reuse a small fixed set of connections instead of opening
+    a fresh pooler connection each time.
 
     Args:
         query: SQL query string (use %s placeholders for PostgreSQL).
@@ -199,23 +279,21 @@ def execute_query(
     Returns:
         List of rows if fetch is True, empty list otherwise.
     """
-    conn = get_connection()
-    try:
-        if fetch and _is_postgres():
-            import psycopg2.extras
+    with _pooled_connection() as conn:
+        try:
+            if fetch and _is_postgres():
+                import psycopg2.extras
 
-            cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-        else:
-            cursor = conn.cursor()
-        cursor.execute(query, params or ())
-        if fetch:
-            results = cursor.fetchall()
-        else:
-            results = []
-        conn.commit()
-        return results
-    finally:
-        conn.close()
+                cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+            else:
+                cursor = conn.cursor()
+            cursor.execute(query, params or ())
+            results = cursor.fetchall() if fetch else []
+            conn.commit()
+            return results
+        except Exception:
+            conn.rollback()
+            raise
 
 
 def _placeholder() -> str:

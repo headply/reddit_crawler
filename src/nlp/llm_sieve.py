@@ -348,10 +348,46 @@ def classify_posts_batch(
     if not to_classify:
         return results
 
+    client = _get_client()
+
+    # ── Pre-flight probe ─────────────────────────────────────────────────
+    # Make ONE call before fanning out. If the LLM is fatally unavailable
+    # (bad key, no credit, 4xx), trip the breaker now and route the ENTIRE
+    # batch through the rule fallback — wasting a single call instead of a
+    # full wave of `max_workers` doomed, retried requests.
+    probe_post = to_classify[0]
+    try:
+        probe_result = _llm_classify_one(client, probe_post)
+        breaker.record_success()
+        results.append(probe_result)
+        remaining = to_classify[1:]
+    except Exception as exc:  # noqa: BLE001
+        if _is_fatal_llm_error(exc):
+            breaker.force_trip(f"pre-flight fatal LLM error: {exc.__class__.__name__}: {exc}")
+            logger.error(
+                "Pre-flight LLM probe hit a fatal error (%s) — routing all %d posts "
+                "through the rule fallback with no further API calls.",
+                exc.__class__.__name__, len(to_classify),
+            )
+            results.extend(_rule_fallback(p) for p in to_classify)
+            logger.info(
+                "Batch complete (LLM unavailable): %d results, all rule fallback. %s",
+                len(results), breaker.status_message(),
+            )
+            return results
+        # Transient probe failure: count it and proceed; the fan-out below will
+        # retry/fall back per post as usual.
+        logger.warning("Pre-flight probe failed transiently (%s); proceeding.", exc.__class__.__name__)
+        breaker.record_failure(exc)
+        results.append(_rule_fallback(probe_post))
+        remaining = to_classify[1:]
+
+    if not remaining:
+        return results
+
     # ── LLM fan-out with breaker ─────────────────────────────────────────
     from concurrent.futures import ThreadPoolExecutor, as_completed
 
-    client = _get_client()
     completed = 0
     fallback_count = 0
 
@@ -385,7 +421,7 @@ def classify_posts_batch(
             return _rule_fallback(post)
 
     with ThreadPoolExecutor(max_workers=max_workers) as pool:
-        futures = {pool.submit(_classify_or_skip, post): post for post in to_classify}
+        futures = {pool.submit(_classify_or_skip, post): post for post in remaining}
         for future in as_completed(futures):
             completed += 1
             try:
@@ -397,10 +433,10 @@ def classify_posts_batch(
             if not result.get("llm_classified"):
                 fallback_count += 1
 
-            if completed % 50 == 0 or completed == len(to_classify):
+            if completed % 50 == 0 or completed == len(remaining):
                 logger.info(
                     "Progress: %d/%d (%s) fallback=%d",
-                    completed, len(to_classify), breaker.status_message(),
+                    completed, len(remaining), breaker.status_message(),
                     fallback_count,
                 )
 
