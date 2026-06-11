@@ -62,36 +62,51 @@ def get_connection(*, statement_timeout_ms: int = 30000):
         ConnectionError: If PostgreSQL connection fails with a helpful message.
     """
     if _is_postgres():
+        import time
+
         import psycopg2
         import psycopg2.extras
 
-        try:
-            conn = psycopg2.connect(
-                DATABASE_URL,
-                connect_timeout=10,
-                # TCP keepalives so a silently-dropped socket (NAT timeout,
-                # pooler recycle) surfaces as an error instead of a hang.
-                keepalives=1,
-                keepalives_idle=30,
-                keepalives_interval=10,
-                keepalives_count=3,
-                # Server kills any statement exceeding this, so a stuck query
-                # cannot wedge a worker thread indefinitely.
-                options=f"-c statement_timeout={statement_timeout_ms}",
-            )
-            conn.autocommit = False
-            return conn
-        except psycopg2.OperationalError as e:
-            logger.error("Failed to connect to PostgreSQL: %s", e)
-            raise ConnectionError(
-                "Could not connect to PostgreSQL. Please verify:\n"
-                "  1. DATABASE_URL is correct in your Streamlit secrets or .env\n"
-                "  2. The PostgreSQL server is running and reachable\n"
-                "  3. Your credentials (user/password) are valid\n"
-                "  4. The database exists and accepts connections\n\n"
-                f"Current DATABASE_URL starts with: {DATABASE_URL[:25]}...\n\n"
-                f"Original error: {e}"
-            ) from e
+        # The Supavisor pooler occasionally drops a connection mid-auth under
+        # load (FATAL EAUTHTIMEOUT). That is transient, so retry a couple of
+        # times with short backoff before giving up. Bounded so we never hang.
+        last_exc: Exception | None = None
+        for attempt in range(1, 4):
+            try:
+                conn = psycopg2.connect(
+                    DATABASE_URL,
+                    connect_timeout=10,
+                    # TCP keepalives so a silently-dropped socket (NAT timeout,
+                    # pooler recycle) surfaces as an error instead of a hang.
+                    keepalives=1,
+                    keepalives_idle=30,
+                    keepalives_interval=10,
+                    keepalives_count=3,
+                    # Server kills any statement exceeding this, so a stuck query
+                    # cannot wedge a worker thread indefinitely.
+                    options=f"-c statement_timeout={statement_timeout_ms}",
+                )
+                conn.autocommit = False
+                return conn
+            except psycopg2.OperationalError as e:
+                last_exc = e
+                if attempt < 3:
+                    logger.warning(
+                        "PostgreSQL connect attempt %d/3 failed (%s); retrying.",
+                        attempt, str(e).splitlines()[0] if str(e) else e,
+                    )
+                    time.sleep(0.5 * attempt)
+
+        logger.error("Failed to connect to PostgreSQL after retries: %s", last_exc)
+        raise ConnectionError(
+            "Could not connect to PostgreSQL. Please verify:\n"
+            "  1. DATABASE_URL is correct in your Streamlit secrets or .env\n"
+            "  2. The PostgreSQL server is running and reachable\n"
+            "  3. Your credentials (user/password) are valid\n"
+            "  4. The database exists and accepts connections\n\n"
+            f"Current DATABASE_URL starts with: {DATABASE_URL[:25]}...\n\n"
+            f"Original error: {last_exc}"
+        ) from last_exc
     else:
         import sqlite3
 
@@ -408,6 +423,105 @@ def insert_classification(classification: dict[str, Any]) -> None:
                 ),
             )
         conn.commit()
+    finally:
+        conn.close()
+
+
+_CLASSIFICATION_COLUMNS = (
+    "post_id", "is_job", "job_type", "seniority", "domain",
+    "work_mode", "sentiment_score", "urgency_score",
+    "confidence", "llm_classified", "industry_vertical",
+    "company_stage", "compensation_min", "compensation_max",
+    "compensation_currency", "compensation_period",
+    "equity_mentioned", "is_scam", "scam_reasons", "post_category",
+)
+
+_CLASSIFICATION_UPDATE_COLS = tuple(c for c in _CLASSIFICATION_COLUMNS if c != "post_id")
+
+
+def _classification_row(c: dict[str, Any]) -> tuple:
+    """Project a classification dict into the column order above."""
+    return (
+        c["post_id"], c.get("is_job"), c.get("job_type"), c.get("seniority"),
+        c.get("domain"), c.get("work_mode"), c.get("sentiment_score"),
+        c.get("urgency_score"), c.get("confidence"), c.get("llm_classified", False),
+        c.get("industry_vertical"), c.get("company_stage"), c.get("compensation_min"),
+        c.get("compensation_max"), c.get("compensation_currency"),
+        c.get("compensation_period"), c.get("equity_mentioned"), c.get("is_scam"),
+        c.get("scam_reasons"), c.get("post_category"),
+    )
+
+
+def persist_classifications_bulk(
+    classifications: list[dict[str, Any]],
+    tech_by_post: dict[str, list[str]] | None = None,
+    chunk_size: int = 500,
+) -> int:
+    """Upsert many classifications (and their tech stacks) over ONE connection.
+
+    Replaces the per-row ``insert_classification`` + ``insert_tech_stack``
+    pattern, which opened ~2 connections per post. Persisting a 10k-post
+    rule-fallback batch that way opened ~20k connections sequentially and
+    overwhelmed the Supabase pooler (FATAL EAUTHTIMEOUT). Here the whole batch
+    goes over a single connection in chunks.
+
+    Returns the number of classification rows written.
+    """
+    if not classifications:
+        return 0
+
+    tech_by_post = tech_by_post or {}
+    conn = get_connection()
+    try:
+        cursor = conn.cursor()
+        cols = ", ".join(_CLASSIFICATION_COLUMNS)
+
+        if _is_postgres():
+            from psycopg2.extras import execute_values
+
+            set_clause = ", ".join(
+                f"{col} = EXCLUDED.{col}" for col in _CLASSIFICATION_UPDATE_COLS
+            )
+            sql = (
+                f"INSERT INTO job_classifications ({cols}) VALUES %s "
+                f"ON CONFLICT (post_id) DO UPDATE SET {set_clause}, classified_at = NOW()"
+            )
+            for start in range(0, len(classifications), chunk_size):
+                chunk = classifications[start:start + chunk_size]
+                execute_values(cursor, sql, [_classification_row(c) for c in chunk])
+        else:
+            qmarks = ", ".join(["?"] * len(_CLASSIFICATION_COLUMNS))
+            cursor.executemany(
+                f"INSERT OR REPLACE INTO job_classifications ({cols}) VALUES ({qmarks})",
+                [_classification_row(c) for c in classifications],
+            )
+
+        # Tech stack — one flat list of (post_id, technology) over the same conn.
+        tech_rows = [
+            (pid, tech)
+            for pid, techs in tech_by_post.items()
+            for tech in (techs or [])
+        ]
+        if tech_rows:
+            if _is_postgres():
+                from psycopg2.extras import execute_values
+
+                for start in range(0, len(tech_rows), chunk_size):
+                    chunk = tech_rows[start:start + chunk_size]
+                    execute_values(
+                        cursor,
+                        "INSERT INTO tech_stack (post_id, technology) VALUES %s "
+                        "ON CONFLICT DO NOTHING",
+                        chunk,
+                    )
+            else:
+                cursor.executemany(
+                    "INSERT OR IGNORE INTO tech_stack (post_id, technology) VALUES (?, ?)",
+                    tech_rows,
+                )
+
+        conn.commit()
+        return len(classifications)
     finally:
         conn.close()
 

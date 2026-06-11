@@ -135,6 +135,39 @@ def _is_retryable(exc: BaseException) -> bool:
     return False
 
 
+def _is_fatal_llm_error(exc: BaseException) -> bool:
+    """Return True for errors that mean the LLM is unusable for the whole run.
+
+    A 401 (bad key), 403 (permission), or a 400 billing/credit error will not
+    fix itself mid-run, so there is no point making the same doomed call for
+    every remaining post. These trip the breaker immediately rather than
+    waiting for ``threshold`` consecutive failures. A 429 (rate limit) is NOT
+    fatal — it is transient and handled by the retry path.
+    """
+    try:
+        import anthropic  # noqa: PLC0415
+    except ImportError:
+        return False
+
+    fatal_types = tuple(
+        t for t in (
+            getattr(anthropic, "AuthenticationError", None),   # 401
+            getattr(anthropic, "PermissionDeniedError", None),  # 403
+        ) if t is not None
+    )
+    if fatal_types and isinstance(exc, fatal_types):
+        return True
+
+    # Any other 4xx except 429 (rate limit) is a non-recoverable client error
+    # for this run — most importantly the 400 returned when credit is exhausted.
+    api_error = getattr(anthropic, "APIStatusError", None)
+    if api_error and isinstance(exc, api_error):
+        status = getattr(exc, "status_code", None)
+        if status is not None and 400 <= status < 500 and status != 429:
+            return True
+    return False
+
+
 def _retrying_call(fn, *, max_attempts: int = 4, base: float = 1.5, cap: float = 30.0):
     """Run ``fn()`` with exponential backoff + jitter on transient errors."""
     attempt = 0
@@ -322,32 +355,46 @@ def classify_posts_batch(
     completed = 0
     fallback_count = 0
 
-    with ThreadPoolExecutor(max_workers=max_workers) as pool:
-        futures = {
-            pool.submit(_llm_classify_one, client, post): post
-            for post in to_classify
-        }
-        for future in as_completed(futures):
-            post = futures[future]
-            completed += 1
-
-            # Already tripped during this run: fall back immediately.
-            if breaker.is_tripped():
-                future.cancel()
-                results.append(_rule_fallback(post))
-                fallback_count += 1
-                continue
-
-            try:
-                results.append(future.result())
-                breaker.record_success()
-            except Exception as exc:  # noqa: BLE001
+    def _classify_or_skip(post: dict[str, Any]) -> dict[str, Any]:
+        """Worker body. Checks the breaker BEFORE making any API call so that
+        once the breaker trips (e.g. on a fatal 401/403/credit error), the
+        remaining queued posts short-circuit to the rule fallback instead of
+        each firing its own doomed request."""
+        if breaker.is_tripped():
+            return _rule_fallback(post)
+        try:
+            result = _llm_classify_one(client, post)
+            breaker.record_success()
+            return result
+        except Exception as exc:  # noqa: BLE001
+            # A fatal error (bad key, no credit, permission) will fail for every
+            # post this run, so trip the breaker NOW rather than after N misses.
+            if _is_fatal_llm_error(exc):
+                breaker.force_trip(f"fatal LLM error: {exc.__class__.__name__}: {exc}")
+                logger.error(
+                    "Fatal LLM error on %s — tripping breaker, rest of batch uses "
+                    "rule fallback with no further API calls: %s",
+                    post.get("post_id"), exc,
+                )
+            else:
                 logger.error(
                     "LLM classification failed for %s after retries: %s",
                     post.get("post_id"), exc,
                 )
                 breaker.record_failure(exc)
-                results.append(_rule_fallback(post))
+            return _rule_fallback(post)
+
+    with ThreadPoolExecutor(max_workers=max_workers) as pool:
+        futures = {pool.submit(_classify_or_skip, post): post for post in to_classify}
+        for future in as_completed(futures):
+            completed += 1
+            try:
+                result = future.result()
+            except Exception as exc:  # noqa: BLE001 — _classify_or_skip never raises, but be safe
+                result = _rule_fallback(futures[future])
+                logger.error("Unexpected worker error: %s", exc)
+            results.append(result)
+            if not result.get("llm_classified"):
                 fallback_count += 1
 
             if completed % 50 == 0 or completed == len(to_classify):

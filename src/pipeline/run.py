@@ -22,8 +22,7 @@ from src.db import (
     _placeholder,
     execute_query,
     init_db,
-    insert_classification,
-    insert_tech_stack,
+    persist_classifications_bulk,
 )
 from src.nlp.circuit_breaker import LLMCircuitBreaker
 from src.scrape.reddit_scraper import scrape_all
@@ -76,26 +75,45 @@ def get_rule_classified_for_upgrade(limit: int) -> list[dict[str, Any]]:
 # ---------------------------------------------------------------------------
 # Storage helpers
 # ---------------------------------------------------------------------------
-def _persist(result: dict[str, Any]) -> bool:
-    """Write a single classification + its tech stack. Swallow errors."""
-    try:
-        post_category = result.get("post_category")
-        if post_category is None:
-            post_category = "hiring" if result.get("is_job") else "other"
-        result["post_category"] = post_category
-        result["is_job"] = post_category in {"hiring", "for_hire", "gig_freelance"}
+def _prepare_for_persist(result: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
+    """Normalize a classification and split off its tech stack.
 
-        tech_stack = result.pop("tech_stack", []) or []
-        insert_classification(result)
-        if tech_stack:
-            insert_tech_stack(result["post_id"], tech_stack)
-        return True
+    Returns ``(classification_without_tech, tech_stack_list)``. Mirrors the
+    normalization the old per-row ``_persist`` did, but without any DB writes
+    so the whole batch can be persisted over a single connection.
+    """
+    post_category = result.get("post_category")
+    if post_category is None:
+        post_category = "hiring" if result.get("is_job") else "other"
+    result["post_category"] = post_category
+    result["is_job"] = post_category in {"hiring", "for_hire", "gig_freelance"}
+    tech_stack = result.pop("tech_stack", []) or []
+    return result, tech_stack
+
+
+def _persist_all(results: list[dict[str, Any]]) -> int:
+    """Persist a whole batch of classifications over ONE connection.
+
+    Replaces the previous ``sum(_persist(r) for r in results)`` loop, which
+    opened ~2 connections per post and overwhelmed the Supabase pooler on
+    large (e.g. 10k) rule-fallback batches. Returns rows stored (0 on failure).
+    """
+    if not results:
+        return 0
+
+    tech_by_post: dict[str, list[str]] = {}
+    prepared: list[dict[str, Any]] = []
+    for r in results:
+        classification, tech = _prepare_for_persist(r)
+        prepared.append(classification)
+        if tech:
+            tech_by_post[classification["post_id"]] = tech
+
+    try:
+        return persist_classifications_bulk(prepared, tech_by_post)
     except Exception as exc:  # noqa: BLE001
-        logger.error(
-            "Failed to store classification for %s: %s",
-            result.get("post_id"), exc,
-        )
-        return False
+        logger.error("Bulk persist of %d classifications failed: %s", len(prepared), exc)
+        return 0
 
 
 # ---------------------------------------------------------------------------
@@ -132,9 +150,9 @@ def enrich_and_store(
             except Exception as inner:  # noqa: BLE001
                 logger.error("Rule fallback failed for %s: %s", post.get("post_id"), inner)
 
-    stored = sum(1 for r in results if _persist(r))
     llm_n = sum(1 for r in results if r.get("llm_classified"))
-    rule_n = stored - llm_n
+    stored = _persist_all(results)
+    rule_n = max(0, stored - llm_n)
     logger.info(
         "enrich_and_store: stored=%d llm=%d rule=%d (%s)",
         stored, llm_n, rule_n, breaker.status_message(),

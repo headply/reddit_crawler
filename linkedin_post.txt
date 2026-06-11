@@ -1,0 +1,42 @@
+My data pipeline had been dead for 5 days. I only found out because I randomly decided to check.
+
+Here's the story, and the lesson I won't forget.
+
+I built a side project a while back: a pipeline that scrapes job posts from Reddit, classifies them, and feeds a dashboard. It runs twice a day on its own. It's a portfolio project, so I don't babysit it. I set it up, it works, I move on.
+
+Today I decided to peek at it for the first time in a bit. The dashboard looked stale. I opened the logs and my stomach dropped: the last successful run was 5 days ago. Five days. It had been silently broken the whole time and I had no idea.
+
+So I went digging. And the bug was a great teacher.
+
+The final error in the log said the process was "killed, likely due to running out of memory." Case closed, right? Except it wasn't out of memory. That message was a red herring.
+
+What actually happened: one tiny piece of code, the part that opens a connection to my database, had no timeout set. So when the database got slow for a moment, that connection just waited. Forever. No error, no crash. Just a frozen task quietly hanging.
+
+It gets worse. My system has a 35-minute safety timer that's supposed to kill any task that runs too long. It tried. It sent the task a polite "please shut down" signal. But a process frozen mid-network-call can't even hear that signal, so it ignored it and kept hanging. The safety net had a hole in it.
+
+And the final twist: I had a rule that says "only one run at a time." Sensible, except that one frozen run was now holding the door shut for every run that came after it. So instead of one bad run, I got 5 days of runs piling up behind a corpse that wouldn't fall over.
+
+One missing timeout cascaded into a multi-day outage.
+
+The fixes were straightforward once I understood it:
+- Give every network call a timeout, so "slow" becomes a quick error instead of an infinite wait.
+- Stop opening a fresh database connection for every single record (I was hammering the connection limit).
+- Don't share one client across many threads when it isn't built for it.
+
+But here's the real lesson, and it has nothing to do with timeouts:
+
+The bug wasn't the disaster. The silence was.
+
+The pipeline broke in a way that, honestly, happens to everyone. What made it a 5-day problem instead of a 35-minute one is that nothing told me. No email. No alert. No nudge. It failed quietly, and quiet failures are the most expensive kind, because they buy themselves unlimited time.
+
+So the most important thing I added wasn't a timeout. It was alerting. Now, the moment a run fails, or even just runs longer than it should, I get an email. (Fun detail: my first attempt to send those alerts ALSO hung, because my host blocks the email ports. So I switched to sending alerts over a normal web request. Even your alarm system needs an alarm system.)
+
+If you're running anything on a schedule, a pipeline, a cron job, a bot, a backup, ask yourself one question:
+
+"If this broke right now, how would I find out?"
+
+If the answer is "I'd eventually notice," that's not a monitoring strategy. That's luck. And luck runs out after about 5 days.
+
+Build the thing. Then build the thing that tells you when the thing breaks.
+
+#DataEngineering #Python #Airflow #LessonsLearned #SoftwareEngineering #BuildInPublic
