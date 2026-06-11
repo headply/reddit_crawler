@@ -8,6 +8,7 @@ fallback taking over whenever the LLM is unresponsive.
 from __future__ import annotations
 
 import logging
+import os
 from datetime import datetime, timedelta
 from typing import Any
 
@@ -16,25 +17,59 @@ from airflow.operators.python import PythonOperator
 
 logger = logging.getLogger(__name__)
 
+# Comma-separated list of recipients for failure / SLA-miss alerts.
+ALERT_EMAILS = [e.strip() for e in os.getenv("ALERT_EMAIL", "").split(",") if e.strip()]
+
 DEFAULT_ARGS: dict[str, Any] = {
     "owner": "mayowa",
-    "email_on_failure": False,
+    # Email on failure so a stuck/failed run is never again silent for days.
+    # Delivery is via Resend SMTP, configured in docker-compose.
+    "email": ALERT_EMAILS,
+    "email_on_failure": bool(ALERT_EMAILS),
     "retries": 1,
     "retry_delay": timedelta(minutes=5),
     "execution_timeout": timedelta(minutes=35),
 }
 
 # How many freshly-scraped posts to classify per DAG run.
-CLASSIFY_BATCH_LIMIT = 300
+# The rule fallback is pure-Python and free, so when the LLM is down we still
+# want to drain the entire backlog rather than trickle 300/run (the old cap is
+# exactly why ~10k scraped posts left only ~300 visible on the dashboard).
+CLASSIFY_BATCH_LIMIT = int(os.getenv("CLASSIFY_BATCH_LIMIT", "5000"))
 
 # How many rule-fallback rows to upgrade with the LLM per DAG run.
 RECLASSIFY_BATCH_LIMIT = 300
+
+
+def _alert_sla_miss(dag, task_list, blocking_task_list, slas, blocking_tis):  # noqa: ANN001
+    """SLA-miss callback — fires WHILE a task is still running past its SLA.
+
+    This is the safety net that turns a future hang into a 15-minute alert
+    instead of a multi-day silent outage: unlike execution_timeout (which
+    relies on a SIGTERM the hung process may ignore), the SLA miss is detected
+    by the scheduler independently of the stuck task.
+    """
+    # `slas` is the list of SlaMiss records (each has .task_id); `task_list`
+    # is a pre-formatted string, so we read task ids off `slas`.
+    missed = [getattr(s, "task_id", str(s)) for s in (slas or [])]
+    logger.error(
+        "SLA MISS on reddit_jobs_pipeline — tasks %s exceeded their SLA. "
+        "Likely a hang (DB/PRAW). Check the faulthandler dump in the task log.",
+        missed or task_list,
+    )
 
 
 # ---------------------------------------------------------------------------
 # Task callables — each returns a dict pushed to XCom; never raises.
 # ---------------------------------------------------------------------------
 def scrape_reddit_task(**context: Any) -> dict[str, int]:
+    # If the scrape is still alive after 20 min (a healthy run is ~3 min), dump
+    # every thread's stack to the task log, repeating each minute. The next time
+    # it hangs, the frozen frame (e.g. psycopg2 connect, prawcore sleep) lands in
+    # the log automatically — no need to catch it live with py-spy.
+    import faulthandler
+    import sys
+    faulthandler.dump_traceback_later(20 * 60, repeat=True, file=sys.stderr)
     try:
         from src.scrape.reddit_scraper import scrape_all
         posts = scrape_all()
@@ -43,6 +78,8 @@ def scrape_reddit_task(**context: Any) -> dict[str, int]:
     except Exception as exc:  # noqa: BLE001
         logger.exception("Scrape failed: %s", exc)
         count = 0
+    finally:
+        faulthandler.cancel_dump_traceback_later()
     context["ti"].xcom_push(key="scraped_count", value=count)
     return {"scraped_count": count}
 
@@ -145,11 +182,15 @@ with DAG(
     start_date=datetime(2026, 1, 1),
     catchup=False,
     max_active_runs=1,
+    sla_miss_callback=_alert_sla_miss,
     tags=["reddit", "jobs"],
 ) as dag:
     scrape_reddit = PythonOperator(
         task_id="scrape_reddit",
         python_callable=scrape_reddit_task,
+        # A healthy scrape finishes in ~3 min. If it runs past 15, the
+        # scheduler fires the SLA-miss alert while the task is still stuck.
+        sla=timedelta(minutes=15),
     )
 
     dedupe_posts = PythonOperator(

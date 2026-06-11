@@ -31,6 +31,18 @@ services:
       AIRFLOW__WEBSERVER__SECRET_KEY: ${AIRFLOW_SECRET_KEY}
       _AIRFLOW_WWW_USER_USERNAME: ${AIRFLOW_ADMIN_USER}
       _AIRFLOW_WWW_USER_PASSWORD: ${AIRFLOW_ADMIN_PASSWORD}
+      # SLA-miss checks must be enabled for the hang alert to fire.
+      AIRFLOW__CORE__CHECK_SLAS: "True"
+      # Failure / SLA alert recipients, read by the DAG.
+      ALERT_EMAIL: ${ALERT_EMAIL}
+      # Resend SMTP — delivers Airflow's email_on_failure messages.
+      AIRFLOW__SMTP__SMTP_HOST: smtp.resend.com
+      AIRFLOW__SMTP__SMTP_PORT: "587"
+      AIRFLOW__SMTP__SMTP_STARTTLS: "True"
+      AIRFLOW__SMTP__SMTP_SSL: "False"
+      AIRFLOW__SMTP__SMTP_USER: resend
+      AIRFLOW__SMTP__SMTP_PASSWORD: ${RESEND_API_KEY}
+      AIRFLOW__SMTP__SMTP_MAIL_FROM: ${ALERT_EMAIL_FROM}
     command: airflow standalone
     depends_on:
       airflow-postgres:

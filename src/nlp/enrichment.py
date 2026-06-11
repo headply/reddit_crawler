@@ -65,20 +65,30 @@ _RANT_MARKERS = (
 # Title tags that REQUIRE this exact wording in the title for the post to
 # be classified as a real opportunity. Body-only hiring signals are
 # ignored — they have far too many false positives.
+# STRONG tags: unambiguous enough to match anywhere in the title (as whole
+# words / phrases). A title containing any of these is almost certainly an
+# opportunity.
 _HIRING_TITLE_TAGS = (
-    "[hiring]", "hiring", "we're hiring", "we are hiring", "now hiring",
+    "[hiring]", "we're hiring", "we are hiring", "now hiring",
     "looking to hire", "open role", "open position", "job opening",
     "open positions",
 )
 _FOR_HIRE_TITLE_TAGS = (
-    "[for hire]", "for hire", "available for hire", "looking for work",
-    "looking for clients", "open to work", "open to freelance",
-    "freelance available",
+    "[for hire]", "available for hire", "looking for clients",
+    "open to work", "open to freelance", "freelance available",
 )
 _GIG_TITLE_TAGS = (
     "[gig]", "[task]", "freelance gig", "one-off project", "small project",
     "quick gig", "paid project",
 )
+
+# WEAK bare words: real hiring signal ONLY when they lead the title
+# (e.g. "Hiring: Senior Dev", "For hire - logo designer"). Mid-sentence they
+# are usually incidental ("...companies hiring last year", "no contract work")
+# and must NOT tag the post as a job.
+_HIRING_PREFIX_WORDS = ("hiring", "hiring:", "hiring -", "hiring —")
+_FOR_HIRE_PREFIX_WORDS = ("for hire", "for-hire", "looking for work")
+_GIG_PREFIX_WORDS = ("gig", "task")
 
 _LENGTH_FLOOR = 80
 _FOR_HIRE_FOCUSED_SUBS = {s.lower() for s in SUBREDDIT_GROUPS.get("for_hire_focused", [])}
@@ -91,6 +101,28 @@ def _normalise(text: str) -> str:
 
 def _has_any(text: str, needles: tuple[str, ...]) -> bool:
     return any(needle in text for needle in needles)
+
+
+# Cache of compiled word-boundary patterns, keyed by the needle tuple.
+_WORD_BOUNDARY_CACHE: dict[tuple[str, ...], re.Pattern[str]] = {}
+
+
+def _has_any_word(text: str, needles: tuple[str, ...]) -> bool:
+    """Like ``_has_any`` but matches whole words/phrases only.
+
+    ``"hiring" in "companies hiring last year"`` is True for a bare substring
+    check, which is exactly how advice/discussion posts leaked through the
+    title-tag gate as false-positive jobs. Word-boundary matching keeps the
+    real signal (``we're hiring``) while rejecting incidental mentions.
+    Bracketed tags like ``[hiring]`` are unaffected (they are matched
+    separately as literal substrings, since ``[`` is already a boundary).
+    """
+    pattern = _WORD_BOUNDARY_CACHE.get(needles)
+    if pattern is None:
+        alternation = "|".join(re.escape(n) for n in needles)
+        pattern = re.compile(rf"(?<!\w)(?:{alternation})(?!\w)")
+        _WORD_BOUNDARY_CACHE[needles] = pattern
+    return pattern.search(text) is not None
 
 
 def _title_starts_with(title: str, prefixes: tuple[str, ...]) -> bool:
@@ -139,16 +171,36 @@ def _hard_veto_category(title: str, body: str) -> Optional[str]:
     return None
 
 
+def _starts_with_word(title_n: str, words: tuple[str, ...]) -> bool:
+    """True if the title begins with one of the bare hiring words.
+
+    Allows an optional leading bracket/space so "[hiring] ...", "hiring: ..."
+    and "for hire - ..." all count, but a mid-sentence "...hiring..." does not.
+    """
+    stripped = title_n.lstrip("[](){} \t")
+    return any(stripped.startswith(w) for w in words)
+
+
 def _category_from_title_tag(title_n: str) -> Optional[str]:
-    """Return 'hiring' / 'for_hire' / 'gig_freelance' if the title carries the tag."""
-    # For-hire is checked first because "[hiring]" appears as a substring of
-    # nothing for-hire-related, but "for hire" + "hire" overlap requires
-    # ordering. We check the more specific tag first.
-    if _has_any(title_n, _FOR_HIRE_TITLE_TAGS):
+    """Return 'hiring' / 'for_hire' / 'gig_freelance' if the title carries the tag.
+
+    Two tiers, to keep recall while cutting false positives:
+      * STRONG tags (bracketed or unambiguous phrases) match as whole words
+        anywhere in the title.
+      * WEAK bare words ("hiring", "gig", "for hire") only count when they
+        LEAD the title — mid-sentence they are usually incidental mentions
+        ("companies hiring last year") and previously leaked through as jobs.
+
+    For-hire is checked first because its tags are the most specific.
+    """
+    # For-hire (most specific first).
+    if _has_any_word(title_n, _FOR_HIRE_TITLE_TAGS) or _starts_with_word(title_n, _FOR_HIRE_PREFIX_WORDS):
         return "for_hire"
-    if _has_any(title_n, _GIG_TITLE_TAGS):
+    # Gigs.
+    if _has_any_word(title_n, _GIG_TITLE_TAGS) or _starts_with_word(title_n, _GIG_PREFIX_WORDS):
         return "gig_freelance"
-    if _has_any(title_n, _HIRING_TITLE_TAGS):
+    # Hiring.
+    if _has_any_word(title_n, _HIRING_TITLE_TAGS) or _starts_with_word(title_n, _HIRING_PREFIX_WORDS):
         return "hiring"
     return None
 

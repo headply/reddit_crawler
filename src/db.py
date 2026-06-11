@@ -40,11 +40,23 @@ def _is_postgres() -> bool:
     )
 
 
-def get_connection():
+def get_connection(*, statement_timeout_ms: int = 30000):
     """Create and return a database connection.
 
     Returns PostgreSQL connection if DATABASE_URL is a postgres URI,
     otherwise falls back to SQLite for local development.
+
+    The PostgreSQL connection is hardened against the failure mode that
+    silently froze this pipeline for 5 days: a ``psycopg2.connect`` with no
+    ``connect_timeout`` blocks forever when the database (or Supabase pooler)
+    is unreachable or at its connection cap, and a process stuck in that
+    blocking C call cannot even be killed by Airflow's SIGTERM. With these
+    settings a stuck connection fails in seconds with a clear error instead.
+
+    Args:
+        statement_timeout_ms: Server-side ceiling on any single statement.
+            Pass ``0`` to disable for genuinely long operations (e.g. a
+            ``REFRESH MATERIALIZED VIEW CONCURRENTLY``).
 
     Raises:
         ConnectionError: If PostgreSQL connection fails with a helpful message.
@@ -54,7 +66,19 @@ def get_connection():
         import psycopg2.extras
 
         try:
-            conn = psycopg2.connect(DATABASE_URL)
+            conn = psycopg2.connect(
+                DATABASE_URL,
+                connect_timeout=10,
+                # TCP keepalives so a silently-dropped socket (NAT timeout,
+                # pooler recycle) surfaces as an error instead of a hang.
+                keepalives=1,
+                keepalives_idle=30,
+                keepalives_interval=10,
+                keepalives_count=3,
+                # Server kills any statement exceeding this, so a stuck query
+                # cannot wedge a worker thread indefinitely.
+                options=f"-c statement_timeout={statement_timeout_ms}",
+            )
             conn.autocommit = False
             return conn
         except psycopg2.OperationalError as e:
@@ -240,6 +264,55 @@ def insert_post(post_data: dict[str, Any]) -> bool:
         conn.close()
 
 
+_POST_COLUMNS = (
+    "post_id", "title", "body", "author", "subreddit",
+    "score", "num_comments", "created_utc", "post_url",
+)
+
+
+def insert_posts_bulk(posts: list[dict[str, Any]]) -> int:
+    """Insert many posts over a single connection, skipping duplicates.
+
+    Replaces the previous one-connection-per-post pattern, which opened a
+    fresh connection for every row and — under 8 concurrent scraper threads —
+    churned through (and exhausted) the database/pooler connection cap. Here a
+    whole subreddit's posts go in over one connection in one round trip.
+
+    Returns:
+        Number of rows actually inserted (duplicates are ignored).
+    """
+    if not posts:
+        return 0
+
+    rows = [tuple(p[col] for col in _POST_COLUMNS) for p in posts]
+    conn = get_connection()
+    try:
+        cursor = conn.cursor()
+        if _is_postgres():
+            from psycopg2.extras import execute_values
+
+            execute_values(
+                cursor,
+                f"""INSERT INTO posts ({", ".join(_POST_COLUMNS)})
+                    VALUES %s
+                    ON CONFLICT (post_id) DO NOTHING""",
+                rows,
+            )
+            inserted = cursor.rowcount
+        else:
+            before = conn.total_changes
+            cursor.executemany(
+                f"""INSERT OR IGNORE INTO posts ({", ".join(_POST_COLUMNS)})
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                rows,
+            )
+            inserted = conn.total_changes - before
+        conn.commit()
+        return inserted
+    finally:
+        conn.close()
+
+
 def insert_classification(classification: dict[str, Any]) -> None:
     """Insert or update a job classification for a post."""
     ph = _placeholder()
@@ -351,7 +424,9 @@ def refresh_views() -> dict[str, int]:
         "mv_compensation_by_role",
         "mv_subreddit_quality",
     ]
-    conn = get_connection()
+    # Materialized view refreshes legitimately run longer than the default
+    # 30s statement timeout, so disable it for this connection only.
+    conn = get_connection(statement_timeout_ms=0)
     try:
         conn.autocommit = True
         cursor = conn.cursor()
