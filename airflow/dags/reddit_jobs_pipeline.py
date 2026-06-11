@@ -20,12 +20,69 @@ logger = logging.getLogger(__name__)
 # Comma-separated list of recipients for failure / SLA-miss alerts.
 ALERT_EMAILS = [e.strip() for e in os.getenv("ALERT_EMAIL", "").split(",") if e.strip()]
 
+# Open file handle for faulthandler dumps; kept alive at module scope so the
+# timer thread can keep writing to it for the duration of the scrape task.
+_FAULT_DUMP_FH = None
+
+def _send_resend_email(subject: str, body: str) -> None:
+    """Send an alert via Resend's HTTPS API (port 443).
+
+    We deliberately do NOT use Airflow's SMTP email_on_failure: DigitalOcean
+    blocks outbound SMTP ports (25/465/587), so smtplib just times out — which
+    both fails to alert AND stalls the failure path for minutes. The Resend
+    REST API over HTTPS is never blocked. A hard 15s timeout guarantees the
+    alert path itself can never hang the worker.
+    """
+    import json
+    import urllib.request
+
+    api_key = os.getenv("RESEND_API_KEY")
+    mail_from = os.getenv("ALERT_EMAIL_FROM")
+    if not (api_key and mail_from and ALERT_EMAILS):
+        logger.warning("Resend alert skipped: RESEND_API_KEY/ALERT_EMAIL_FROM/ALERT_EMAIL not all set.")
+        return
+
+    payload = json.dumps({
+        "from": mail_from,
+        "to": ALERT_EMAILS,
+        "subject": subject,
+        "text": body,
+    }).encode("utf-8")
+    req = urllib.request.Request(
+        "https://api.resend.com/emails",
+        data=payload,
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            logger.info("Resend alert sent (HTTP %s): %s", resp.status, subject)
+    except Exception as exc:  # noqa: BLE001 — alerting must never raise
+        logger.error("Resend alert failed to send: %s", exc)
+
+
+def _alert_failure(context: dict[str, Any]) -> None:
+    """on_failure_callback — POST a failure alert via Resend HTTPS."""
+    ti = context.get("task_instance")
+    dag_id = getattr(ti, "dag_id", "reddit_jobs_pipeline")
+    task_id = getattr(ti, "task_id", "?")
+    exc = context.get("exception")
+    log_url = getattr(ti, "log_url", "")
+    _send_resend_email(
+        subject=f"[Airflow] FAILED: {dag_id}.{task_id}",
+        body=f"Task {task_id} in {dag_id} failed.\n\nException: {exc}\n\nLog: {log_url}",
+    )
+
+
 DEFAULT_ARGS: dict[str, Any] = {
     "owner": "mayowa",
-    # Email on failure so a stuck/failed run is never again silent for days.
-    # Delivery is via Resend SMTP, configured in docker-compose.
-    "email": ALERT_EMAILS,
-    "email_on_failure": bool(ALERT_EMAILS),
+    # Alert on failure via Resend's HTTPS API (NOT SMTP — DO blocks SMTP ports).
+    # email_on_failure is left off so smtplib is never invoked.
+    "email_on_failure": False,
+    "on_failure_callback": _alert_failure,
     "retries": 1,
     "retry_delay": timedelta(minutes=5),
     "execution_timeout": timedelta(minutes=35),
@@ -57,6 +114,13 @@ def _alert_sla_miss(dag, task_list, blocking_task_list, slas, blocking_tis):  # 
         "Likely a hang (DB/PRAW). Check the faulthandler dump in the task log.",
         missed or task_list,
     )
+    _send_resend_email(
+        subject="[Airflow] SLA MISS: reddit_jobs_pipeline",
+        body=(
+            f"Tasks {missed or task_list} exceeded their SLA and are likely "
+            f"hung (DB/PRAW). Check the faulthandler dump in the scrape task log."
+        ),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -64,12 +128,21 @@ def _alert_sla_miss(dag, task_list, blocking_task_list, slas, blocking_tis):  # 
 # ---------------------------------------------------------------------------
 def scrape_reddit_task(**context: Any) -> dict[str, int]:
     # If the scrape is still alive after 20 min (a healthy run is ~3 min), dump
-    # every thread's stack to the task log, repeating each minute. The next time
-    # it hangs, the frozen frame (e.g. psycopg2 connect, prawcore sleep) lands in
-    # the log automatically — no need to catch it live with py-spy.
+    # every thread's stack so the next hang's frozen frame (e.g. psycopg2
+    # connect, prawcore sleep) is captured automatically.
+    #
+    # faulthandler needs a real file descriptor; Airflow's wrapped sys.stderr
+    # has none (io.UnsupportedOperation: fileno), so we point it at an actual
+    # file on the mounted logs volume and log the path.
     import faulthandler
-    import sys
-    faulthandler.dump_traceback_later(20 * 60, repeat=True, file=sys.stderr)
+    dump_path = f"/opt/airflow/logs/faulthandler_scrape_{os.getpid()}.log"
+    try:
+        global _FAULT_DUMP_FH
+        _FAULT_DUMP_FH = open(dump_path, "w")  # kept open via module ref
+        faulthandler.dump_traceback_later(20 * 60, repeat=True, file=_FAULT_DUMP_FH)
+        logger.info("faulthandler armed; stack dumps (if any) → %s", dump_path)
+    except Exception as exc:  # noqa: BLE001 — diagnostics must never fail the task
+        logger.warning("Could not arm faulthandler: %s", exc)
     try:
         from src.scrape.reddit_scraper import scrape_all
         posts = scrape_all()
@@ -80,6 +153,12 @@ def scrape_reddit_task(**context: Any) -> dict[str, int]:
         count = 0
     finally:
         faulthandler.cancel_dump_traceback_later()
+        fh = globals().get("_FAULT_DUMP_FH")
+        if fh is not None:
+            try:
+                fh.close()
+            except Exception:  # noqa: BLE001
+                pass
     context["ti"].xcom_push(key="scraped_count", value=count)
     return {"scraped_count": count}
 
